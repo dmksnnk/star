@@ -1,0 +1,27 @@
+{{template "header.html" .}}
+<p class="title">Connected</p>
+
+<div class="main-container">
+    <label for="listen-address">Connect you game to:</label>
+    <textarea id="listen-address" class="nes-textarea" readonly rows="1">{{ .ListenAddress }}</textarea>
+
+    <label for="textarea-logs">Logs</label>
+    <div class="logs-container">
+        <textarea id="textarea-logs" class="nes-textarea" readonly rows="5"></textarea>
+    </div>
+</div>
+
+<div class=" bottom-button-container">
+    <a href="/disconnect" class="nes-btn is-warning">Stop</a>
+</div>
+
+<script>
+    const eventSource = new EventSource('/logs');
+    eventSource.onmessage = function (event) {
+        const textareaElement = document.getElementById('textarea-logs');
+        textareaElement.value += event.data + '\n';
+        textareaElement.scrollTop = textareaElement.scrollHeight; // Auto-scroll to the bottom
+    };
+</script>
+
+{{template "footer.html" .}}

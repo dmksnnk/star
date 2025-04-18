@@ -1,0 +1,15 @@
+{{template "header.html" .}}
+<p class="title">Error</p>
+
+<div class="main-container">
+    <i class="nes-icon is-large is-half heart"></i>
+    <p>{{.Message}}</p>
+    <div class="message-container">
+        <p class="nes-balloon">{{.Error}}</p>
+    </div>
+</div>
+
+<div class="bottom-button-container">
+    <a href="{{.BackLink}}" class="nes-btn is-warning">Back</a>
+</div>
+{{template "footer.html" .}}

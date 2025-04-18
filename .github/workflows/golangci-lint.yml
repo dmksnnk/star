@@ -1,0 +1,30 @@
+name: golangci-lint
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+  # Optional: allow read access to pull request. Use with `only-new-issues` option.
+  # pull-requests: read
+
+jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Intall WebKitGTK
+        run: |
+          sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.0-dev
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "v1.23"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+          args: --timeout=2m

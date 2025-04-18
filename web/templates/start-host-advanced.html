@@ -1,0 +1,29 @@
+{{template "header.html" .}}
+<p class="title">Start server</p>
+
+{{template "_messages.html" .}}
+
+<div class="main-container">
+    <form method="POST" action="/start-host-advanced">
+        <div class="nes-field is-inline">
+            <label for="game-port">Game port:</label>
+            <input type="number" name="game-port" list="games" placeholder="Enter the game port number" class="nes-input" required
+                   title: "A port number the game is running on"
+                   value={{ .InputCache.Get "game-port" }}>
+            <datalist id="games">
+                {{ range $game := .Games }}
+                <option value="{{ $game.Port }}" {{ if eq ($.InputCache.Get "game-port" ) (printf "%d" $game.Port) }}selected{{ end }}>{{ $game.Name }}</option>
+                {{ end }}
+            </datalist>
+        </div>
+
+        {{ template "_advanced.html" . }}
+
+        <button type="submit" class="nes-btn is-primary">Start</button>
+    </form>
+</div>
+
+<div class="bottom-button-container">
+    <a href="/start-host" class="nes-btn is-warning">Back</a>
+</div>
+{{template "footer.html" .}}

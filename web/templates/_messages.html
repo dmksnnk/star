@@ -1,0 +1,8 @@
+<div class="message-container">
+    {{ range $error := .Errors }}
+    <p class="error-message">{{ $error }}</p>
+    {{ end }}
+    {{ range $msg := .Messages }}
+    <p>{{ $msg }}</p>
+    {{ end }}
+</div>
