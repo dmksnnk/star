@@ -86,7 +86,7 @@ func Call(conn net.Conn, msg string) (string, error) {
 }
 
 type Client struct {
-	conn net.Conn
+	Conn net.Conn
 }
 
 func NewTestClient(t *testing.T, port int) *Client {
@@ -104,9 +104,9 @@ func NewTestClient(t *testing.T, port int) *Client {
 		}
 	})
 
-	return &Client{conn: conn}
+	return &Client{Conn: conn}
 }
 
 func (c *Client) Call(msg string) (string, error) {
-	return Call(c.conn, msg)
+	return Call(c.Conn, msg)
 }
