@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/dmksnnk/star/internal/host"
 	"github.com/dmksnnk/star/internal/integrationtest"
@@ -125,19 +126,24 @@ func TestMultipleClients(t *testing.T) {
 	hostForwarder := startHost(t, ctx, &eg, api.Client(t, secret), key, gameHost.Port())
 
 	// game peer part
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		peerForwarder := startPeer(t, ctx, &eg, api.Client(t, secret), key, fmt.Sprintf("peer-%d", i))
 
 		message := fmt.Sprintf("hello %d", i)
 		gamePeer := integrationtest.NewTestClient(t, peerForwarder.LocalAddr().(*net.UDPAddr).Port)
+		// set deadline to 5 seconds
+		if err := gamePeer.Conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("set deadline: %s", err)
+		}
+
 		for i := 0; i < 10; i++ {
 			resp, err := gamePeer.Call(message)
 			if err != nil {
-				t.Fatalf("call: %s", err)
+				t.Fatalf("call peer %d: %s", i, err)
 			}
 
 			if want, got := message, resp; want != got {
-				t.Errorf("unexpected response, want: %q, got: %q", want, got)
+				t.Errorf("peer %d, unexpected response, want: %q, got: %q", i, want, got)
 			}
 		}
 	}

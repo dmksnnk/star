@@ -61,6 +61,10 @@ The server can be configured using the following environment variables:
 - `CERT_DOMAINS` - A comma-separated list of domains for which to issue certificates (required).
 - `CERT_IP_ADDRESS` - A comma-separated list of IP addresses for which to issue certificates.
 
+## Clients
+
+Client is a simple WebView application that dynamically renders HTML pages using Go templates, served by a local HTTP server. See [screenshots](./_screenshots/) for a preview.
+
 ## How It Works
 
 In summary, it is a relay server with two types of clients: host and peer. The host and peer connect to each other via this relay server. It operates on top of HTTP/3 and relays UDP traffic using HTTP/3 DATAGRAMs.
