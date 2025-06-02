@@ -1,11 +1,12 @@
 # Based on:
 # https://docs.github.com/en/actions/use-cases-and-examples/publishing-packages/publishing-docker-images#publishing-images-to-github-packages
-name: Image
+name: Build
 
 on:
-  create:
+  push:
     tags:
       - "**"
+  workflow_dispatch: # manual trigger
 
 jobs:
   registar:
@@ -42,3 +43,31 @@ jobs:
           # use GitHub Actions cache
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  star:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Install deps
+        run: |
+          sudo apt update && \
+          DEBIAN_FRONTEND=noninteractive sudo apt install -y \
+            libgtk-3-0 \
+            libwebkit2gtk-4.1-0 \
+            g++-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            build-essential \
+            ca-certificates \
+            pkg-config
+
+      - name: Build windows
+      # symlink eventtoken.h to EventToken.h in the correct location for mingw-w64
+        run: |
+          ln -s /usr/share/mingw-w64/include/eventtoken.h /usr/x86_64-w64-mingw32/include/EventToken.h
+          make build-star-win
