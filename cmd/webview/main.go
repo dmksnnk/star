@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	w := webview.New(true)
+	w := webview.New(false)
 	defer w.Destroy()
 
 	ws := webserver.New(tmpl, w.Terminate)
