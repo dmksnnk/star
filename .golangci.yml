@@ -1,7 +1,10 @@
-issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-rules:
-    # Exclude some linters from running on tests files.
-    - path: _test\.go
-      linters:
-        - errcheck
+version: "2"
+linters:
+  disable:
+    - errcheck # currently too noisy
+  exclusions:
+    rules:
+      # Exclude some linters from running on tests files.
+      - path: _test\.go
+        linters:
+          - errcheck

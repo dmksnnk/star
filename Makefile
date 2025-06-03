@@ -8,14 +8,24 @@ build-registar:
 	@echo "Building into $(BUILD_DIR)"
 	GOOS=linux GOARCH=amd64 go build -v -o $(BUILD_DIR)/registar ./cmd/registar/...
 
-.PHONY: build-star-win
-build-star-win:
+.PHONY: build-cli-win
+build-cli-win:
 	GOOS=windows GOARCH=amd64 go build  -v -o $(BUILD_DIR)/star.exe ./cmd/star/...
 
 .PHONY: build-star-win
-build-webview-win:
+build-star-win:
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
-		go build -ldflags "-H windowsgui" -v -o $(BUILD_DIR)/webview.exe ./cmd/webview/...
+		go build -ldflags "-H windowsgui" -v -o $(BUILD_DIR)/star-windows-amd64.exe ./cmd/webview/...
+
+.PHONY: build-star-linux
+build-star-linux:
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-linux-gnu-gcc CXX=x86_64-linux-gnu-g++ \
+		go build -v -o $(BUILD_DIR)/star-linux-amd64 ./cmd/webview/...
+
+.PHONY: build-star-mac
+build-star-mac:
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
+		go build -v -o $(BUILD_DIR)/star-darwin-arm64 ./cmd/webview/...
 
 .PHONY: build-docker
 build-docker:
@@ -35,7 +45,7 @@ golangci:
 		-v "$(current_dir)/.cache:/.golangci-lint-cache" \
 		-v $(current_dir):/app \
 		-w /app \
-		golangci/golangci-lint:v1.61.0-alpine golangci-lint run --timeout 2m
+		golangci/golangci-lint:v2.1.6-alpine golangci-lint run --timeout 2m
 
 .PHONY: test
 test:
