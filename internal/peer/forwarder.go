@@ -189,7 +189,7 @@ func (w *UDPConn) RemoteAddr() net.Addr {
 }
 
 func (w *UDPConn) Read(p []byte) (int, error) {
-	n, addr, err := w.PacketConn.ReadFrom(p)
+	n, addr, err := w.ReadFrom(p)
 	if err != nil {
 		return n, err
 	}
@@ -212,5 +212,5 @@ func (w *UDPConn) Write(p []byte) (int, error) {
 	w.mux.RLock()
 	defer w.mux.RUnlock()
 
-	return w.PacketConn.WriteTo(p, w.addr)
+	return w.WriteTo(p, w.addr)
 }

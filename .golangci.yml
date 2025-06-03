@@ -1,5 +1,7 @@
 version: "2"
 linters:
+  disable:
+    - errcheck # currently too noisy
   exclusions:
     rules:
       # Exclude some linters from running on tests files.

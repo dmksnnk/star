@@ -33,7 +33,7 @@ func main() {
 	}
 
 	client := api.NewClient(dialer, cfg.Registar.URL, []byte(cfg.Secret))
-	slog.Debug("client created", "url", cfg.Registar.URL.String())
+	slog.Debug("client created", "url", cfg.Registar.String())
 
 	switch cfg.Command {
 	case "host":
