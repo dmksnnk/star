@@ -45,7 +45,7 @@ golangci:
 		-v "$(current_dir)/.cache:/.golangci-lint-cache" \
 		-v $(current_dir):/app \
 		-w /app \
-		golangci/golangci-lint:v1.61.0-alpine golangci-lint run --timeout 2m
+		golangci/golangci-lint:v2.1.6-alpine golangci-lint run --timeout 2m
 
 .PHONY: test
 test:
