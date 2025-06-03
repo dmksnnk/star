@@ -69,5 +69,11 @@ jobs:
       - name: Build windows
       # symlink eventtoken.h to EventToken.h in the correct location for mingw-w64
         run: |
-          ln -s /usr/share/mingw-w64/include/eventtoken.h /usr/x86_64-w64-mingw32/include/EventToken.h
+          sudo ln -s /usr/share/mingw-w64/include/eventtoken.h /usr/x86_64-w64-mingw32/include/EventToken.h
           make build-star-win
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-binaries
+          path: |
+            bin/star-windows-amd64.exe
