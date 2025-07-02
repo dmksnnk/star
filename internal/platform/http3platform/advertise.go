@@ -1,4 +1,4 @@
-package http3
+package http3platform
 
 import (
 	"net/http"

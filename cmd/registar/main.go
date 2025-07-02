@@ -20,7 +20,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/dmksnnk/star/internal/cert"
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
+	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/api"
