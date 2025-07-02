@@ -117,7 +117,7 @@ type fakeServer struct {
 	connected map[auth.Key][]string
 }
 
-func (s *fakeServer) Forward(ctx context.Context, key auth.Key, peerID string) (http3.RequestStream, error) {
+func (s *fakeServer) Forward(ctx context.Context, key auth.Key, peerID string) (*http3.RequestStream, error) {
 	if s.connected == nil {
 		s.connected = make(map[auth.Key][]string)
 	}

@@ -3,7 +3,7 @@ package control
 import (
 	"bufio"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -12,11 +12,17 @@ import (
 // transport is simple transport on a top of a single connection.
 type transport struct {
 	mux  sync.Mutex
-	conn net.Conn
+	conn Conn
 	br   *bufio.Reader
 }
 
-func newTransport(conn net.Conn) *transport {
+// Conn is a minimal interface of a [net.Conn] that is used by the transport.
+type Conn interface {
+	io.ReadWriteCloser
+	SetDeadline(time.Time) error
+}
+
+func newTransport(conn Conn) *transport {
 	return &transport{
 		conn: conn,
 		br:   bufio.NewReader(conn),
