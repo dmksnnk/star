@@ -8,8 +8,7 @@ import (
 	"syscall"
 
 	"github.com/dmksnnk/star/internal"
-	"github.com/dmksnnk/star/internal/host"
-	"github.com/dmksnnk/star/internal/peer"
+	"github.com/dmksnnk/star/internal/forwarder"
 	"github.com/dmksnnk/star/internal/registar/api"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"golang.org/x/sync/errgroup"
@@ -61,8 +60,7 @@ func runHost(ctx context.Context, cfg hostConfig, client *api.Client) {
 		cfg.GameKey = auth.NewKey()
 	}
 
-	hostRegisterer := &host.Registerer{}
-	hostForwarder, err := hostRegisterer.Register(ctx, client, cfg.GameKey)
+	listener, err := forwarder.RegisterGame(ctx, client, cfg.GameKey)
 	if err != nil {
 		slog.Error("register game", "error", err)
 		os.Exit(1)
@@ -70,14 +68,25 @@ func runHost(ctx context.Context, cfg hostConfig, client *api.Client) {
 
 	slog.Info("game registed", "key", cfg.GameKey.String())
 
+	host := forwarder.NewHost(
+		forwarder.WithNotifyDisconnect(func(err error) {
+			if err != nil {
+				slog.Error("host disconnected with error", "error", err)
+			}
+		}),
+	)
+
 	var eg errgroup.Group
 	eg.Go(func() error {
-		<-ctx.Done()
-		return hostForwarder.Close()
+		return host.Forward(ctx, listener, cfg.GameHostPort)
 	})
-	eg.Go(func() error {
-		return hostForwarder.ListenAndForward(ctx, cfg.GameHostPort)
-	})
+	slog.Info("host forwarding started", "game_port", cfg.GameHostPort)
+
+	<-ctx.Done()
+	if err := host.Close(); err != nil {
+		slog.Error("close host", "error", err)
+		os.Exit(1)
+	}
 
 	if err := eg.Wait(); err != nil {
 		slog.Error("run host", "error", err)
@@ -86,26 +95,17 @@ func runHost(ctx context.Context, cfg hostConfig, client *api.Client) {
 }
 
 func runPeer(ctx context.Context, cfg peerConfig, client *api.Client) {
-	peerConn := &peer.Connector{}
-	peerForwarder, err := peerConn.ConnectAndListen(ctx, client, cfg.GameKey, cfg.PeerID)
+	peer, err := forwarder.PeerListenLocalUDP(ctx, client)
 	if err != nil {
-		slog.Error("connect and listen", "error", err)
+		slog.Error("peer listen local UDP", "error", err)
 		os.Exit(1)
 	}
+	defer peer.Close()
 
-	slog.Info("connected to", "address", peerForwarder.LocalAddr().String())
+	slog.Info("peer listening on", "address", peer.Addr().String())
 
-	var eg errgroup.Group
-	eg.Go(func() error {
-		<-ctx.Done()
-		return peerForwarder.Close()
-	})
-	eg.Go(func() error {
-		return peerForwarder.AcceptAndForward()
-	})
-
-	if err := eg.Wait(); err != nil {
-		slog.Error("run peer", "error", err)
+	if err := peer.ConnectAndForward(ctx, cfg.GameKey, cfg.PeerID); err != nil {
+		slog.Error("connect and listen", "error", err)
 		os.Exit(1)
 	}
 }
