@@ -10,20 +10,25 @@ import (
 
 	"github.com/dmksnnk/star/internal/errcode"
 	"github.com/dmksnnk/star/internal/platform"
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
+	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/quic-go/quic-go/http3"
 )
 
-// ErrInvalidToken is returned when a token is not valid.
-var ErrInvalidToken = errors.New("invalid token")
+var (
+	// ErrInvalidToken is returned when a token is not valid.
+	ErrInvalidToken         = errors.New("invalid token")
+	ErrHostNotFound         = errors.New("host not found")
+	ErrPeerNotFound         = errors.New("peer not found")
+	ErrPeerAlreadyConnected = errors.New("peer already connected")
+)
 
 // Registar is a service for game registration.
 type Registar struct {
 	hosts          *platform.Map[auth.Key, *control.Connector]
-	waitingPeers   *platform.Map2[auth.Key, string, http3.Stream]
-	connectedPeers *platform.Map2[auth.Key, string, http3.Stream]
+	waitingPeers   *platform.Map2[auth.Key, string, *http3.Stream]
+	connectedPeers *platform.Map2[auth.Key, string, *http3.Stream]
 
 	logger *slog.Logger
 	wg     sync.WaitGroup
@@ -36,14 +41,15 @@ func New() *Registar {
 
 	return &Registar{
 		hosts:          platform.NewMap[auth.Key, *control.Connector](),
-		waitingPeers:   platform.NewMap2[auth.Key, string, http3.Stream](),
-		connectedPeers: platform.NewMap2[auth.Key, string, http3.Stream](),
+		waitingPeers:   platform.NewMap2[auth.Key, string, *http3.Stream](),
+		connectedPeers: platform.NewMap2[auth.Key, string, *http3.Stream](),
 		logger:         logger,
 	}
 }
 
 // RegisterGame registers a game with the given server address.
-func (s *Registar) RegisterGame(ctx context.Context, key auth.Key, conn *http3platform.StreamConn) {
+func (s *Registar) RegisterGame(ctx context.Context, key auth.Key, stream *http3.Stream) {
+	conn := http3platform.NewStreamConn(stream)
 	s.hosts.Put(key, control.NewConnector(conn))
 
 	// watch for connection close
@@ -51,12 +57,12 @@ func (s *Registar) RegisterGame(ctx context.Context, key auth.Key, conn *http3pl
 	go func() {
 		defer s.wg.Done()
 
-		ctx := conn.Context()
+		ctx := stream.Context()
 		<-ctx.Done()
 
 		err := context.Cause(ctx)
 		var peers []string
-		s.connectedPeers.ForEach(key, func(peerID string, stream http3.Stream) {
+		s.connectedPeers.ForEach(key, func(peerID string, stream *http3.Stream) {
 			stream.Close()
 			peers = append(peers, peerID)
 		})
@@ -69,54 +75,37 @@ func (s *Registar) RegisterGame(ctx context.Context, key auth.Key, conn *http3pl
 	}()
 }
 
-// GameExists returns true if a game with the given key exists.
-func (s *Registar) GameExists(key auth.Key) bool {
-	_, exists := s.hosts.Get(key)
-	return exists
-}
-
 // ConnectGame connects a game to the server.
-func (s *Registar) ConnectGame(ctx context.Context, key auth.Key, peerID string, peerStream http3.Stream) {
+func (s *Registar) ConnectGame(ctx context.Context, key auth.Key, peerID string, peerStreamer http3.HTTPStreamer) error {
 	hostControl, ok := s.hosts.Get(key)
 	if !ok {
-		peerStream.CancelRead(errcode.HostClosed)
-		s.logger.Error("host not found", "key", key.String())
-		return
+		return ErrHostNotFound
 	}
 
-	s.waitingPeers.Put(key, peerID, peerStream)
+	if _, ok := s.connectedPeers.Get(key, peerID); ok {
+		return ErrPeerAlreadyConnected
+	}
+
+	s.waitingPeers.Put(key, peerID, peerStreamer.HTTPStream())
 	defer s.waitingPeers.Delete(key, peerID, nil)
 
 	if err := hostControl.RequestForward(ctx, peerID); err != nil {
-		peerStream.CancelRead(errcode.HostInternalError)
-		s.logger.Error("request host to forward", "error", err)
-		return
+		return fmt.Errorf("request host to forward: %w", err)
 	}
-}
 
-// PeerExists returns true if a peer exists.
-func (s *Registar) PeerExists(key auth.Key, peerID string) bool {
-	_, ok := s.connectedPeers.Get(key, peerID)
-	return ok
-}
-
-// WaitingPeerExists returns true if a peer waiting for forwarding exists.
-func (s *Registar) WaitingPeerExists(key auth.Key, peerID string) bool {
-	_, ok := s.waitingPeers.Get(key, peerID)
-	return ok
+	return nil
 }
 
 // Forward forwards peer's conn to the game host conn.
-func (s *Registar) Forward(ctx context.Context, key auth.Key, peerID string, hostStream http3.Stream) {
+func (s *Registar) Forward(ctx context.Context, key auth.Key, peerID string, hostStreamer http3.HTTPStreamer) error {
 	peerStream, ok := s.waitingPeers.Get(key, peerID)
 	if !ok {
-		hostStream.CancelRead(errcode.PeerClosed)
-		s.logger.Error("waiting peer not found", "key", key.String(), "peer_id", peerID)
-		return
+		return ErrPeerNotFound
 	}
 
 	defer s.connectedPeers.Put(key, peerID, peerStream)
 
+	hostStream := hostStreamer.HTTPStream()
 	s.wg.Add(2)
 	go func() {
 		defer s.wg.Done()
@@ -131,9 +120,11 @@ func (s *Registar) Forward(ctx context.Context, key auth.Key, peerID string, hos
 		err := s.forwardToPeer(hostStream.Context(), peerStream, hostStream)
 		s.connectedPeers.Delete(key, peerID, err)
 	}()
+
+	return nil
 }
 
-func (s *Registar) forwardToHost(ctx context.Context, hostConn, peerConn http3.Stream) error {
+func (s *Registar) forwardToHost(ctx context.Context, hostConn, peerConn *http3.Stream) error {
 	for {
 		dg, err := peerConn.ReceiveDatagram(ctx)
 		if err != nil {
@@ -165,7 +156,7 @@ func (s *Registar) forwardToHost(ctx context.Context, hostConn, peerConn http3.S
 	}
 }
 
-func (s *Registar) forwardToPeer(ctx context.Context, peerConn, hostConn http3.Stream) error {
+func (s *Registar) forwardToPeer(ctx context.Context, peerConn, hostConn *http3.Stream) error {
 	for {
 		dg, err := hostConn.ReceiveDatagram(ctx)
 		if err != nil {
@@ -235,14 +226,14 @@ func (s *Registar) Peers(key auth.Key) []string {
 
 // NotifyPeerConnected adds a callback to be called when a peer connects.
 func (s *Registar) NotifyPeerConnected(f func(auth.Key, string)) {
-	s.connectedPeers.NotifyAdd(func(key auth.Key, peerID string, _ http3.Stream) {
+	s.connectedPeers.NotifyAdd(func(key auth.Key, peerID string, _ *http3.Stream) {
 		f(key, peerID)
 	})
 }
 
 // NotifyPeerDisconnected adds a callback to be called when a peer disconnects.
 func (s *Registar) NotifyPeerDisconnected(f func(auth.Key, string, error)) {
-	s.connectedPeers.NotifyDelete(func(key auth.Key, peerID string, _ http3.Stream, reason error) {
+	s.connectedPeers.NotifyDelete(func(key auth.Key, peerID string, _ *http3.Stream, reason error) {
 		f(key, peerID, reason)
 	})
 }
