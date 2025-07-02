@@ -6,11 +6,12 @@ import (
 	"errors"
 
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 // Application error codes.
 const (
-	Exit = quic.ApplicationErrorCode(0)
+	Exit = http3.ErrCode(0)
 )
 
 // Stream error codes.
@@ -25,7 +26,7 @@ const (
 
 // IsLocalQUICConnClosed returns true if the error is local QUIC stream closed.
 func IsLocalQUICConnClosed(err error) bool {
-	var appErr *quic.ApplicationError
+	var appErr *http3.Error
 	if errors.As(err, &appErr) {
 		return !appErr.Remote && appErr.ErrorCode == Exit
 	}
@@ -34,7 +35,7 @@ func IsLocalQUICConnClosed(err error) bool {
 
 // IsRemoteQUICConnClosed returns true if the error is remote QUIC stream closed.
 func IsRemoteQUICConnClosed(err error) bool {
-	var appErr *quic.ApplicationError
+	var appErr *http3.Error
 	if errors.As(err, &appErr) {
 		return appErr.Remote && appErr.ErrorCode == Exit
 	}
@@ -47,6 +48,16 @@ func IsLocalStreamError(err error, code quic.StreamErrorCode) bool {
 	if errors.As(err, &streamErr) {
 		return !streamErr.Remote && streamErr.ErrorCode == code
 	}
+	return false
+}
+
+// IsLocalHTTPError returns true if the error is local HTTP/3 error with the given code.
+func IsLocalHTTPError(err error, code quic.StreamErrorCode) bool {
+	var http3Err *http3.Error
+	if errors.As(err, &http3Err) {
+		return !http3Err.Remote && http3Err.ErrorCode == http3.ErrCode(code)
+	}
+
 	return false
 }
 
