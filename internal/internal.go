@@ -3,11 +3,10 @@ package internal
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
 
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
+	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -24,23 +23,16 @@ func NewDialer(caCert string) (*http3platform.HTTP3Dialer, error) {
 		},
 	}
 	if caCert != "" {
-		caCert, err := loadCACert(caCert)
+		data, err := os.ReadFile(caCert)
+		if err != nil {
+			return nil, fmt.Errorf("read file: %w", err)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("load CA certificate: %w", err)
 		}
 		dialer.TLSConfig.RootCAs = x509.NewCertPool()
-		dialer.TLSConfig.RootCAs.AddCert(caCert)
+		dialer.TLSConfig.RootCAs.AppendCertsFromPEM(data)
 	}
 
 	return dialer, nil
-}
-
-func loadCACert(path string) (*x509.Certificate, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-
-	block, _ := pem.Decode(data)
-	return x509.ParseCertificate(block.Bytes)
 }
