@@ -16,8 +16,7 @@ func TestFakeGameServer(t *testing.T) {
 	serverResponse := "pong"
 
 	t.Run("call and handle", func(t *testing.T) {
-		ll := &platform.LocalListener{}
-		serverConn, err := ll.ListenUDP(context.TODO(), 0)
+		serverConn, err := net.ListenPacket("udp", "localhost:0")
 		if err != nil {
 			t.Fatalf("listen local UDP: %s", err)
 		}
@@ -67,12 +66,12 @@ func TestFakeGameServer(t *testing.T) {
 
 	t.Run("server and client", func(t *testing.T) {
 		receivedMessages := make(chan string, 1)
-		srv := integrationtest.NewTestServer(t, func(req string) string {
+		srv := integrationtest.NewTestUDPServer(t, func(req string) string {
 			receivedMessages <- req
 			return serverResponse
 		})
 
-		cl := integrationtest.NewTestClient(t, srv.Port())
+		cl := integrationtest.NewTestUDPClient(t, srv.Port())
 		resp, err := cl.Call(clientMessage)
 		if err != nil {
 			t.Fatalf("call: %s", err)

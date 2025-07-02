@@ -37,11 +37,10 @@ type Server struct {
 	conn net.PacketConn
 }
 
-func NewTestServer(t *testing.T, handler func(req string) string) *Server {
+func NewTestUDPServer(t *testing.T, handler func(req string) string) *Server {
 	t.Helper()
 
-	ll := &platform.LocalListener{}
-	conn, err := ll.ListenUDP(context.TODO(), 0)
+	conn, err := net.ListenPacket("udp", "localhost:0")
 	if err != nil {
 		t.Fatalf("listen local UDP: %s", err)
 	}
@@ -89,7 +88,7 @@ type Client struct {
 	Conn net.Conn
 }
 
-func NewTestClient(t *testing.T, port int) *Client {
+func NewTestUDPClient(t *testing.T, port int) *Client {
 	t.Helper()
 
 	ld := &platform.LocalDialer{}

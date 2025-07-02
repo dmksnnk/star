@@ -7,18 +7,22 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/host"
+	"github.com/dmksnnk/star/internal/forwarder"
 	"github.com/dmksnnk/star/internal/integrationtest"
-	"github.com/dmksnnk/star/internal/peer"
 	"github.com/dmksnnk/star/internal/platform"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/api/apitest"
 	"github.com/dmksnnk/star/internal/registar/auth"
-	"golang.org/x/sync/errgroup"
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestSingleHostAndPeer(t *testing.T) {
 	secret := []byte("secret")
@@ -26,20 +30,19 @@ func TestSingleHostAndPeer(t *testing.T) {
 	api := apitest.NewServer(t, secret, newRegistar(t))
 
 	ctx := context.Background()
-	var eg errgroup.Group
 
 	// game host part
-	gameHost := integrationtest.NewTestServer(t, func(req string) string {
+	gameHost := integrationtest.NewTestUDPServer(t, func(req string) string {
 		return req
 	})
-	hostForwarder := startHost(t, ctx, &eg, api.Client(t, secret), key, gameHost.Port())
+	startHost(t, ctx, api.Client(t, secret), key, gameHost.Port())
 
 	// game peer part
-	peerForwarder := startPeer(t, ctx, &eg, api.Client(t, secret), key, "peer")
-	gamePeer := integrationtest.NewTestClient(t, peerForwarder.LocalAddr().(*net.UDPAddr).Port)
+	peerForwarder := startPeer(t, ctx, api.Client(t, secret), key, "peer")
+	gamePeer := integrationtest.NewTestUDPClient(t, peerForwarder.Addr().(*net.UDPAddr).Port)
 
 	for i := 0; i < 10; i++ {
-		msg := randSting(platform.MTU)
+		msg := randString(platform.MTU)
 		resp, err := gamePeer.Call(msg)
 		if err != nil {
 			t.Fatalf("call: %s", err)
@@ -49,14 +52,6 @@ func TestSingleHostAndPeer(t *testing.T) {
 			t.Errorf("unexpected response, want: %d bytes, got: %d bytes", len(want), len(got))
 		}
 	}
-
-	if err := hostForwarder.Close(); err != nil {
-		t.Errorf("close host forwarder: %s", err)
-	}
-
-	if err := eg.Wait(); err != nil {
-		t.Errorf("wait: %s", err)
-	}
 }
 
 func TestOrder(t *testing.T) {
@@ -64,25 +59,23 @@ func TestOrder(t *testing.T) {
 	key := auth.NewKey()
 	api := apitest.NewServer(t, secret, newRegistar(t))
 
-	var eg errgroup.Group
 	ctx := context.Background()
 
 	// host part
 
-	hostListener := &platform.LocalListener{}
-	hostConn, err := hostListener.ListenUDP(ctx, 0)
+	hostConn, err := net.ListenPacket("udp", "localhost:0")
 	if err != nil {
 		t.Fatalf("listen local UDP: %s", err)
 	}
 
-	_ = startHost(t, ctx, &eg, api.Client(t, secret), key, hostConn.LocalAddr().(*net.UDPAddr).Port)
+	startHost(t, ctx, api.Client(t, secret), key, hostConn.LocalAddr().(*net.UDPAddr).Port)
 
 	// game peer part
 
-	peerForwarder := startPeer(t, ctx, &eg, api.Client(t, secret), key, "peer")
+	peerForwarder := startPeer(t, ctx, api.Client(t, secret), key, "peer")
 
 	peerDialer := &platform.LocalDialer{}
-	peerConn, err := peerDialer.DialUDP(context.TODO(), peerForwarder.LocalAddr().(*net.UDPAddr).Port)
+	peerConn, err := peerDialer.DialUDP(context.TODO(), peerForwarder.Addr().(*net.UDPAddr).Port)
 	if err != nil {
 		t.Fatalf("dial local UDP: %s", err)
 	}
@@ -110,32 +103,81 @@ func TestOrder(t *testing.T) {
 	}
 }
 
-func TestMultipleClients(t *testing.T) {
+func TestMultipleRemoteClients(t *testing.T) {
 	secret := []byte("secret")
 	key := auth.NewKey()
 	api := apitest.NewServer(t, secret, newRegistar(t))
 
 	// game host part
-	gameHost := integrationtest.NewTestServer(t, func(req string) string {
+	gameHost := integrationtest.NewTestUDPServer(t, func(req string) string {
 		return req
 	})
 
 	ctx := context.Background()
-	var eg errgroup.Group
 
-	hostForwarder := startHost(t, ctx, &eg, api.Client(t, secret), key, gameHost.Port())
+	startHost(t, ctx, api.Client(t, secret), key, gameHost.Port())
 
 	// game peer part
 	for i := range 10 {
-		peerForwarder := startPeer(t, ctx, &eg, api.Client(t, secret), key, fmt.Sprintf("peer-%d", i))
-
-		message := fmt.Sprintf("hello %d", i)
-		gamePeer := integrationtest.NewTestClient(t, peerForwarder.LocalAddr().(*net.UDPAddr).Port)
+		peerForwarder := startPeer(t, ctx, api.Client(t, secret), key, fmt.Sprintf("peer-%d", i))
+		gamePeer := integrationtest.NewTestUDPClient(t, peerForwarder.Addr().(*net.UDPAddr).Port)
 		// set deadline to 5 seconds
 		if err := gamePeer.Conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 			t.Fatalf("set deadline: %s", err)
 		}
 
+		message := fmt.Sprintf("hello %d", i)
+		for i := 0; i < 10; i++ {
+			resp, err := gamePeer.Call(message)
+			if err != nil {
+				t.Fatalf("call peer %d: %s", i, err)
+			}
+
+			if want, got := message, resp; want != got {
+				t.Errorf("peer %d, unexpected response, want: %q, got: %q", i, want, got)
+			}
+		}
+	}
+}
+
+func TestMultipleLocalClients(t *testing.T) {
+	secret := []byte("secret")
+	key := auth.NewKey()
+	api := apitest.NewServer(t, secret, newRegistar(t))
+
+	// game host part
+	gameHost := integrationtest.NewTestUDPServer(t, func(req string) string {
+		return req
+	})
+
+	ctx := context.Background()
+
+	startHost(t, ctx, api.Client(t, secret), key, gameHost.Port())
+
+	// game peer part
+	peer, err := forwarder.PeerListenLocalUDP(ctx, api.Client(t, secret))
+	if err != nil {
+		t.Fatalf("listen local UDP peer: %s", err)
+	}
+
+	var wg sync.WaitGroup
+	port := peer.Addr().(*net.UDPAddr).Port
+	for i := range 10 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := peer.ConnectAndForward(ctx, key, fmt.Sprintf("peer-%d", i)); err != nil {
+				t.Error("connect and forward:", err)
+			}
+		}(i)
+
+		gamePeer := integrationtest.NewTestUDPClient(t, port)
+		// set deadline to 5 seconds
+		if err := gamePeer.Conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("set deadline: %s", err)
+		}
+
+		message := fmt.Sprintf("hello %d", i)
 		for i := 0; i < 10; i++ {
 			resp, err := gamePeer.Call(message)
 			if err != nil {
@@ -148,13 +190,10 @@ func TestMultipleClients(t *testing.T) {
 		}
 	}
 
-	if err := hostForwarder.Close(); err != nil {
-		t.Errorf("wait host forwarder: %s", err)
+	if err := peer.Close(); err != nil {
+		t.Errorf("close peer: %s", err)
 	}
-
-	if err := eg.Wait(); err != nil {
-		t.Errorf("wait: %s", err)
-	}
+	wg.Wait()
 }
 
 func newRegistar(t *testing.T) *registar.Registar {
@@ -170,41 +209,60 @@ func newRegistar(t *testing.T) *registar.Registar {
 	return svc
 }
 
-func startHost(t *testing.T, ctx context.Context, eg *errgroup.Group, client host.Client, key auth.Key, port int) *host.Forwarder {
+func startHost(t *testing.T, ctx context.Context, client forwarder.Controller, key auth.Key, port int) {
 	t.Helper()
 
-	hostRegisterer := &host.Registerer{}
-	hostForwarder, err := hostRegisterer.Register(context.Background(), client, key)
+	listener, err := forwarder.RegisterGame(ctx, client, key)
 	if err != nil {
-		t.Fatalf("register host: %s", err)
+		t.Fatalf("register game: %s", err)
 	}
+	host := forwarder.NewHost(
+		forwarder.WithNotifyDisconnect(func(err error) {
+			if err != nil {
+				t.Errorf("host disconnected with error: %s", err)
+			}
+		}),
+	)
 
-	eg.Go(func() error {
+	done := make(chan struct{})
+	go func() error {
+		defer close(done)
 		defer t.Log("host forwarder exited")
-		return hostForwarder.ListenAndForward(ctx, port)
+		return host.Forward(ctx, listener, port)
+	}()
+	t.Cleanup(func() {
+		if err := host.Close(); err != nil {
+			t.Errorf("close host: %s", err)
+		}
+		<-done
 	})
-
-	return hostForwarder
 }
 
-func startPeer(t *testing.T, ctx context.Context, eg *errgroup.Group, client peer.Client, key auth.Key, name string) *peer.Forwarder {
+func startPeer(t *testing.T, ctx context.Context, client forwarder.GameConnector, key auth.Key, name string) *forwarder.Peer {
 	t.Helper()
 
-	peerConn := &peer.Connector{}
-	peerForwarder, err := peerConn.ConnectAndListen(ctx, client, key, name)
+	peer, err := forwarder.PeerListenLocalUDP(ctx, client)
 	if err != nil {
-		t.Fatalf("connect and listen: %s", err)
+		t.Fatalf("peer listen local UDP: %s", err)
 	}
 
-	eg.Go(func() error {
+	done := make(chan struct{})
+	go func() error {
+		defer close(done)
 		defer t.Log("peer forwarder exited")
-		return peerForwarder.AcceptAndForward()
+		return peer.ConnectAndForward(ctx, key, name)
+	}()
+	t.Cleanup(func() {
+		if err := peer.Close(); err != nil {
+			t.Errorf("close peer: %s", err)
+		}
+		<-done
 	})
 
-	return peerForwarder
+	return peer
 }
 
-func randSting(n int) string {
+func randString(n int) string {
 	msg := make([]byte, n)
 	crand.Read(msg)
 	return string(msg)
