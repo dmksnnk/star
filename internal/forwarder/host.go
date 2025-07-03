@@ -18,16 +18,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type Controller interface {
-	control.Registar
-	RegisterGame(ctx context.Context, key auth.Key) (*http3.RequestStream, error)
+// PeerConnectionController allows to register a host and forward connections to it.
+type PeerConnectionController interface {
+	control.ConnectionForwarder
+	RegisterHost(ctx context.Context, key auth.Key) (*http3.RequestStream, error)
 }
 
-// RegisterGame registers a game host.
-func RegisterGame(ctx context.Context, client Controller, key auth.Key) (*control.Listener, error) {
-	stream, err := client.RegisterGame(ctx, key)
+// RegisterHost registers a host on the server.
+func RegisterHost(ctx context.Context, client PeerConnectionController, key auth.Key) (*control.Listener, error) {
+	stream, err := client.RegisterHost(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("register game: %w", err)
+		return nil, fmt.Errorf("register host: %w", err)
 	}
 
 	conn := http3platform.NewStreamConn(stream)
@@ -35,7 +36,7 @@ func RegisterGame(ctx context.Context, client Controller, key auth.Key) (*contro
 	return control.Listen(conn, client, key), nil
 }
 
-// Host forwards game traffic between a game host and remote server.
+// Host forwards game traffic between a game host and a peer.
 type Host struct {
 	dialer *platform.LocalDialer
 	logger *slog.Logger
@@ -61,7 +62,7 @@ func NewHost(ops ...HostOption) *Host {
 	return h
 }
 
-// Forward accepts incoming streams and forwards them to the game host running on the port.
+// Forward accepts incoming peer streams and forwards them to the game host running on the port.
 // Context is used only to for dialing the game host. To cancel the forwarding, call [Host.Close]
 func (h *Host) Forward(ctx context.Context, listener *control.Listener, port int) error {
 	defer listener.Close()
@@ -120,7 +121,7 @@ func (h *Host) trackLink(l *link, add bool) {
 	}
 }
 
-// Close the Forwarder.
+// Close the [Host].
 // It closes all listeners and links, and waits for all links to finish.
 func (h *Host) Close() error {
 	h.mux.Lock()

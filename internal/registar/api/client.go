@@ -44,8 +44,8 @@ func NewClient(dialer *http3platform.HTTP3Dialer, base *url.URL, secret []byte) 
 	return &c
 }
 
-// RegisterGame registers a game under a key with the given server address.
-func (c *Client) RegisterGame(ctx context.Context, key auth.Key) (*http3.RequestStream, error) {
+// RegisterHost registers a host under a key with the given server address.
+func (c *Client) RegisterHost(ctx context.Context, key auth.Key) (*http3.RequestStream, error) {
 	token := auth.NewToken(key, c.secret)
 	path := "/games/" + token.String()
 	reqStream, err := c.connect(ctx, path)
@@ -56,8 +56,8 @@ func (c *Client) RegisterGame(ctx context.Context, key auth.Key) (*http3.Request
 	return reqStream, nil
 }
 
-// ConnectGame connects to a game with the given key.
-func (c *Client) ConnectGame(ctx context.Context, key auth.Key, peerID string) (*http3.RequestStream, error) {
+// ConnectToHost connects to a host identified by a key and returns stream with connection to it.
+func (c *Client) ConnectToHost(ctx context.Context, key auth.Key, peerID string) (*http3.RequestStream, error) {
 	token := auth.NewToken(key, c.secret)
 	path := "/games/" + token.String() + "/connect/" + peerID
 	reqStream, err := c.connect(ctx, path)

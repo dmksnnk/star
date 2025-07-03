@@ -40,7 +40,7 @@ func TestClient(t *testing.T) {
 		hostDisconnected := notifyHostDisconnected(t, svc, key, clientCloseErr)
 
 		client := srv.Client(t, secret)
-		_, err := client.RegisterGame(context.Background(), key)
+		_, err := client.RegisterHost(context.Background(), key)
 		if err != nil {
 			t.Fatalf("register game: %s", err)
 		}
@@ -62,7 +62,7 @@ func TestClient(t *testing.T) {
 		<-runHost(t, cl, key, done)
 
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
-		_, err := cl.ConnectGame(context.Background(), key, "peer")
+		_, err := cl.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
@@ -71,11 +71,11 @@ func TestClient(t *testing.T) {
 		close(done)
 	})
 
-	t.Run("connect to non-existing game", func(t *testing.T) {
+	t.Run("connect to non-existing host", func(t *testing.T) {
 		srv := apitest.NewServer(t, secret, newRegistar(t))
 		cl := srv.Client(t, secret)
 		key := auth.NewKey()
-		_, err := cl.ConnectGame(context.Background(), key, "peer")
+		_, err := cl.ConnectToHost(context.Background(), key, "peer")
 		if !httpplatform.IsNotFound(err) {
 			t.Errorf("expected NotFound error, got: %s", err)
 		}
@@ -84,12 +84,12 @@ func TestClient(t *testing.T) {
 	t.Run("invalid secret", func(t *testing.T) {
 		srv := apitest.NewServer(t, secret, newRegistar(t))
 		cl := srv.Client(t, []byte("invalid secret"))
-		_, err := cl.RegisterGame(context.Background(), auth.NewKey())
+		_, err := cl.RegisterHost(context.Background(), auth.NewKey())
 		if !httpplatform.IsUnauthorized(err) {
 			t.Errorf("expected Unauthorized error, got: %s", err)
 		}
 
-		_, err = cl.ConnectGame(context.Background(), auth.NewKey(), "peer")
+		_, err = cl.ConnectToHost(context.Background(), auth.NewKey(), "peer")
 		if !httpplatform.IsUnauthorized(err) {
 			t.Errorf("expected Unauthorized error, got: %s", err)
 		}
@@ -113,7 +113,7 @@ func TestClient(t *testing.T) {
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
 		peerDisconnected := notifyPeerDisconnected(t, svc, key, "peer", clientCloseErr)
 		peer := srv.Client(t, secret)
-		_, err := peer.ConnectGame(context.Background(), key, "peer")
+		_, err := peer.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
@@ -151,7 +151,7 @@ func TestClient(t *testing.T) {
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
 		peerDisconnected := notifyPeerDisconnected(t, svc, key, "peer", nil)
 		peer := srv.Client(t, secret)
-		peerStream, err := peer.ConnectGame(context.Background(), key, "peer")
+		peerStream, err := peer.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
@@ -180,7 +180,7 @@ func runHost(t *testing.T, client *api.Client, key auth.Key, done <-chan struct{
 	registered := make(chan struct{})
 	var eg errgroup.Group
 	eg.Go(func() error {
-		controlStream, err := client.RegisterGame(context.Background(), key)
+		controlStream, err := client.RegisterHost(context.Background(), key)
 		if err != nil {
 			return fmt.Errorf("register game: %s", err)
 		}

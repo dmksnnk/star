@@ -16,20 +16,22 @@ import (
 
 const peerIDQueryKey = "peer_id"
 
-type Registar interface {
+// ConnectionForwarder returns a forwarded connection to a peer.
+type ConnectionForwarder interface {
 	// Forwards ask server to forward a peer connection.
 	Forward(ctx context.Context, key auth.Key, peerID string) (*http3.RequestStream, error)
 }
 
+// Listener listens for incoming forward requests.
 type Listener struct {
 	tr       *transport
-	registar Registar
+	registar ConnectionForwarder
 	key      auth.Key
 	closed   atomic.Bool
 }
 
 // Listen creates a new listener on a connection.
-func Listen(conn Conn, registar Registar, key auth.Key) *Listener {
+func Listen(conn Conn, registar ConnectionForwarder, key auth.Key) *Listener {
 	return &Listener{
 		tr:       newTransport(conn),
 		registar: registar,
@@ -37,8 +39,8 @@ func Listen(conn Conn, registar Registar, key auth.Key) *Listener {
 	}
 }
 
-// AcceptForward accepts a CONNECT request from [Connector] and then asks the server to forward the connection.
-// Returns net.ErrClosed if the listener is closed.
+// AcceptForward waits and accepts a forward request from [Connector] and then asks the server to forward the connection to it.
+// Returns [net.ErrClosed] if the listener is closed.
 func (c *Listener) AcceptForward() (*http3.RequestStream, error) {
 	if c.closed.Load() {
 		return nil, net.ErrClosed
@@ -81,6 +83,8 @@ func errorResponse(err string, code int) *http.Response {
 	}
 }
 
+// Close loses the listener and the underlying transport.
+// This will unblock any pending [Listener.AcceptForward] calls.
 func (c *Listener) Close() error {
 	c.closed.Store(true)
 	return c.tr.Close()

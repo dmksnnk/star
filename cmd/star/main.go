@@ -60,7 +60,7 @@ func runHost(ctx context.Context, cfg hostConfig, client *api.Client) {
 		cfg.GameKey = auth.NewKey()
 	}
 
-	listener, err := forwarder.RegisterGame(ctx, client, cfg.GameKey)
+	listener, err := forwarder.RegisterHost(ctx, client, cfg.GameKey)
 	if err != nil {
 		slog.Error("register game", "error", err)
 		os.Exit(1)
@@ -104,7 +104,7 @@ func runPeer(ctx context.Context, cfg peerConfig, client *api.Client) {
 
 	slog.Info("peer listening on", "address", peer.Addr().String())
 
-	if err := peer.ConnectAndForward(ctx, cfg.GameKey, cfg.PeerID); err != nil {
+	if err := peer.Forward(ctx, cfg.GameKey, cfg.PeerID); err != nil {
 		slog.Error("connect and listen", "error", err)
 		os.Exit(1)
 	}

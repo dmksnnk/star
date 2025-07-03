@@ -157,7 +157,7 @@ func (ws *WebServer) runHost(ctx context.Context, key auth.Key, req StartGameSer
 	}
 
 	client := api.NewClient(dialer, u, []byte(req.Secret))
-	listener, err := forwarder.RegisterGame(ctx, client, key)
+	listener, err := forwarder.RegisterHost(ctx, client, key)
 	if err != nil {
 		return fmt.Errorf("register game: %w", err)
 	}
@@ -280,7 +280,7 @@ func (ws *WebServer) runPeer(ctx context.Context, req ConnectRequest) (net.Addr,
 		defer ws.wg.Done()
 		ctx := context.Background()
 
-		if err := peer.ConnectAndForward(ctx, req.InviteCode, req.Name); err != nil {
+		if err := peer.Forward(ctx, req.InviteCode, req.Name); err != nil {
 			ws.logger.Error("connect and forward", "error", err)
 			return
 		}

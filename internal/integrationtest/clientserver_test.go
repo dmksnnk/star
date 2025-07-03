@@ -166,7 +166,7 @@ func TestMultipleLocalClients(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := peer.ConnectAndForward(ctx, key, fmt.Sprintf("peer-%d", i)); err != nil {
+			if err := peer.Forward(ctx, key, fmt.Sprintf("peer-%d", i)); err != nil {
 				t.Error("connect and forward:", err)
 			}
 		}(i)
@@ -209,10 +209,10 @@ func newRegistar(t *testing.T) *registar.Registar {
 	return svc
 }
 
-func startHost(t *testing.T, ctx context.Context, client forwarder.Controller, key auth.Key, port int) {
+func startHost(t *testing.T, ctx context.Context, client forwarder.PeerConnectionController, key auth.Key, port int) {
 	t.Helper()
 
-	listener, err := forwarder.RegisterGame(ctx, client, key)
+	listener, err := forwarder.RegisterHost(ctx, client, key)
 	if err != nil {
 		t.Fatalf("register game: %s", err)
 	}
@@ -238,7 +238,7 @@ func startHost(t *testing.T, ctx context.Context, client forwarder.Controller, k
 	})
 }
 
-func startPeer(t *testing.T, ctx context.Context, client forwarder.GameConnector, key auth.Key, name string) *forwarder.Peer {
+func startPeer(t *testing.T, ctx context.Context, client forwarder.HostConnector, key auth.Key, name string) *forwarder.Peer {
 	t.Helper()
 
 	peer, err := forwarder.PeerListenLocalUDP(ctx, client)
@@ -250,7 +250,7 @@ func startPeer(t *testing.T, ctx context.Context, client forwarder.GameConnector
 	go func() error {
 		defer close(done)
 		defer t.Log("peer forwarder exited")
-		return peer.ConnectAndForward(ctx, key, name)
+		return peer.Forward(ctx, key, name)
 	}()
 	t.Cleanup(func() {
 		if err := peer.Close(); err != nil {
