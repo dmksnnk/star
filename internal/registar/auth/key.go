@@ -41,6 +41,7 @@ var crocfordMap = func(r rune) rune {
 }
 
 // Key is a random 16-byte value.
+// Used as a unique identifier.
 type Key [KeySize]byte
 
 func (k Key) String() string {
@@ -123,7 +124,7 @@ func NewKey() Key {
 	return key
 }
 
-// ParseToken parses a token from a string.
+// ParseKey parses a key from a string.
 func ParseKey(text string) (Key, error) {
 	var key Key
 	err := key.UnmarshalText([]byte(text))

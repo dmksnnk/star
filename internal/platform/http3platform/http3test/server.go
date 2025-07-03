@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/cert"
-	"github.com/dmksnnk/star/internal/platform"
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
+	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
@@ -115,8 +114,7 @@ func (s *Server) Addr() net.Addr {
 }
 
 func newLocalUDPConn(t *testing.T) net.PacketConn {
-	ll := &platform.LocalListener{}
-	conn, err := ll.ListenUDP(context.TODO(), 0)
+	conn, err := net.ListenPacket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal("listen UDP:", err)
 	}

@@ -1,14 +1,13 @@
 package api
 
 import (
-	"context"
 	"crypto/tls"
-	"fmt"
+	"errors"
 	"net/http"
 	"time"
 
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
+	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -18,27 +17,11 @@ const pathValuePeerID = "peerID"
 
 // API is a HTTP API for registar service.
 type API struct {
-	service Service
-}
-
-// Service is a registar service.
-type Service interface {
-	// RegisterGame registers a game.
-	RegisterGame(ctx context.Context, key auth.Key, stream *http3platform.StreamConn)
-	// GameExists returns true if a game with the given key exists.
-	GameExists(key auth.Key) bool
-	// PeerExists returns true if a peer exists.
-	PeerExists(key auth.Key, peerID string) bool
-	// ConnectGame connects a peer to a game. Service will handle the conn closing, game host closing and reporting errors, etc.
-	ConnectGame(ctx context.Context, key auth.Key, peerID string, stream http3.Stream)
-	// WaitingPeerExists returns true if a peer waiting for forwarding exists.
-	WaitingPeerExists(key auth.Key, peerID string) bool
-	// Forward forwards peer's conn to the game host conn.
-	Forward(ctx context.Context, key auth.Key, peerID string, hostConn http3.Stream)
+	service *registar.Registar
 }
 
 // New creates a new API on top of the given service.
-func New(s Service) API {
+func New(s *registar.Registar) API {
 	return API{
 		service: s,
 	}
@@ -46,87 +29,75 @@ func New(s Service) API {
 
 // RegisterGame registers a game on the server.
 func (a API) RegisterGame(w http.ResponseWriter, r *http.Request) {
-	conn, ok := a.http3Conn(w)
-	if !ok {
-		return
-	}
-
-	stream, err := conn.OpenStreamSync(r.Context())
-	if err != nil {
-		http.Error(w, fmt.Sprintf("open stream: %s", err), http.StatusInternalServerError)
+	if !a.validateHTTP3Settings(w) {
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 
+	streamer := w.(http3.HTTPStreamer)
+	stream := streamer.HTTPStream()
+
 	key, _ := auth.KeyFromContext(r.Context())
-	streamConn := http3platform.NewStreamConn(stream, conn.LocalAddr(), conn.RemoteAddr())
-	a.service.RegisterGame(r.Context(), key, streamConn)
+	a.service.RegisterGame(r.Context(), key, stream)
 }
 
 // ConnectGame connects a game to the server.
 func (a API) ConnectGame(w http.ResponseWriter, r *http.Request) {
-	_, ok := a.http3Conn(w)
-	if !ok {
+	if !a.validateHTTP3Settings(w) {
 		return
 	}
 
 	key, _ := auth.KeyFromContext(r.Context())
-	if !a.service.GameExists(key) {
-		http.Error(w, "game not found", http.StatusNotFound)
-		return
-	}
-
 	peerID := r.PathValue(pathValuePeerID)
 	if peerID == "" {
 		http.Error(w, "missing peer id", http.StatusBadRequest)
 		return
 	}
 
-	if a.service.PeerExists(key, peerID) {
-		http.Error(w, "peer already exists", http.StatusConflict)
+	streamer := w.(http3.HTTPStreamer)
+	if err := a.service.ConnectGame(r.Context(), key, peerID, streamer); err != nil {
+		if errors.Is(err, registar.ErrHostNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		if errors.Is(err, registar.ErrPeerAlreadyConnected) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-
-	stream := w.(http3.HTTPStreamer).HTTPStream() // this will Flush the response if no response was written
-
-	a.service.ConnectGame(r.Context(), key, peerID, stream)
 }
 
 // Forward forwards a peer's conn to the game host conn.
 func (a API) Forward(w http.ResponseWriter, r *http.Request) {
-	_, ok := a.http3Conn(w)
-	if !ok {
+	if !a.validateHTTP3Settings(w) {
 		return
 	}
 
 	key, _ := auth.KeyFromContext(r.Context())
-	if !a.service.GameExists(key) {
-		http.Error(w, "game not found", http.StatusNotFound)
-		return
-	}
-
 	peerID := r.PathValue(pathValuePeerID)
 	if peerID == "" {
 		http.Error(w, "missing peer id", http.StatusBadRequest)
 		return
 	}
 
-	if !a.service.WaitingPeerExists(key, peerID) {
-		http.Error(w, "peer not found", http.StatusNotFound)
+	streamer := w.(http3.HTTPStreamer)
+	if err := a.service.Forward(r.Context(), key, peerID, streamer); err != nil {
+		if errors.Is(err, registar.ErrPeerNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-
-	stream := w.(http3.HTTPStreamer).HTTPStream() // this will Flush the response if no response was written
-
-	a.service.Forward(r.Context(), key, peerID, stream)
 }
 
-func (a API) http3Conn(w http.ResponseWriter) (http3.Connection, bool) {
+func (a API) validateHTTP3Settings(w http.ResponseWriter) bool {
 	conn := w.(http3.Hijacker).Connection()
 	// wait for the client's SETTINGS
 	select {
@@ -134,16 +105,16 @@ func (a API) http3Conn(w http.ResponseWriter) (http3.Connection, bool) {
 	case <-time.After(10 * time.Second):
 		// didn't receive SETTINGS within 10 seconds
 		http.Error(w, "timeout waiting for client's SETTINGS", http.StatusRequestTimeout)
-		return nil, false
+		return false
 	}
 
 	settings := conn.Settings()
 	if !settings.EnableDatagrams {
 		http.Error(w, "datagrams are not enabled", http.StatusBadRequest)
-		return nil, false
+		return false
 	}
 
-	return conn, true
+	return true
 }
 
 // NewServer creates a new HTTP/3 server.

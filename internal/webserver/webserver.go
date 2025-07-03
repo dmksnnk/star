@@ -16,9 +16,7 @@ import (
 	"text/template"
 
 	"github.com/dmksnnk/star/internal"
-	"github.com/dmksnnk/star/internal/errcode"
-	"github.com/dmksnnk/star/internal/host"
-	"github.com/dmksnnk/star/internal/peer"
+	"github.com/dmksnnk/star/internal/forwarder"
 	"github.com/dmksnnk/star/internal/platform"
 	"github.com/dmksnnk/star/internal/registar/api"
 	"github.com/dmksnnk/star/internal/registar/auth"
@@ -159,24 +157,27 @@ func (ws *WebServer) runHost(ctx context.Context, key auth.Key, req StartGameSer
 	}
 
 	client := api.NewClient(dialer, u, []byte(req.Secret))
-	hostRegisterer := &host.Registerer{}
-	hostForwarder, err := hostRegisterer.Register(ctx, client, key)
+	listener, err := forwarder.RegisterHost(ctx, client, key)
 	if err != nil {
 		return fmt.Errorf("register game: %w", err)
 	}
+	host := forwarder.NewHost(
+		forwarder.WithHostLogger(ws.logger),
+		forwarder.WithNotifyDisconnect(func(err error) {
+			if err != nil {
+				ws.logger.Error("host disconnected with error", "error", err)
+			}
+		}),
+	)
 
-	ws.stopHost = hostForwarder.Close
+	ws.stopHost = host.Close
 
 	ws.wg.Add(1)
 	go func() {
 		defer ws.wg.Done()
 
 		ctx := context.Background()
-		if err := hostForwarder.ListenAndForward(ctx, req.GamePort); err != nil {
-			if errcode.IsLocalQUICConnClosed(err) {
-				return
-			}
-
+		if err := host.Forward(ctx, listener, req.GamePort); err != nil {
 			ws.logger.Error("listen and forward", "error", err)
 			return
 		}
@@ -267,24 +268,25 @@ func (ws *WebServer) runPeer(ctx context.Context, req ConnectRequest) (net.Addr,
 	}
 
 	client := api.NewClient(dialer, u, []byte(req.Secret))
-	peerConn := &peer.Connector{}
-	peerForwarder, err := peerConn.ConnectAndListen(ctx, client, req.InviteCode, req.Name)
+	peer, err := forwarder.PeerListenLocalUDP(ctx, client, forwarder.WithPeerLogger(ws.logger))
 	if err != nil {
-		return nil, fmt.Errorf("connect and listen: %w", err)
+		return nil, fmt.Errorf("listen local UDP peer: %w", err)
 	}
 
-	ws.stopPeer = peerForwarder.Close
+	ws.stopPeer = peer.Close
 
 	ws.wg.Add(1)
 	go func() {
 		defer ws.wg.Done()
-		if err := peerForwarder.AcceptAndForward(); err != nil {
-			ws.logger.Error("accept and forward", "error", err)
+		ctx := context.Background()
+
+		if err := peer.Forward(ctx, req.InviteCode, req.Name); err != nil {
+			ws.logger.Error("connect and forward", "error", err)
 			return
 		}
 	}()
 
-	return peerForwarder.LocalAddr(), nil
+	return peer.Addr(), nil
 }
 
 // Disconnect stops the peer forwarder and waits for it to finish.

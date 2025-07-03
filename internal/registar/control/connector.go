@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 
@@ -15,7 +14,7 @@ type Connector struct {
 }
 
 // NewConnector creates a new connector on a connection.
-func NewConnector(conn net.Conn) *Connector {
+func NewConnector(conn Conn) *Connector {
 	return &Connector{
 		tr: newTransport(conn),
 	}

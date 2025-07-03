@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/errcode"
-	http3platform "github.com/dmksnnk/star/internal/platform/http3"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/api"
@@ -41,7 +40,7 @@ func TestClient(t *testing.T) {
 		hostDisconnected := notifyHostDisconnected(t, svc, key, clientCloseErr)
 
 		client := srv.Client(t, secret)
-		_, err := client.RegisterGame(context.Background(), key)
+		_, err := client.RegisterHost(context.Background(), key)
 		if err != nil {
 			t.Fatalf("register game: %s", err)
 		}
@@ -50,7 +49,7 @@ func TestClient(t *testing.T) {
 			t.Fatalf("client close: %s", err)
 		}
 
-		waitNotify(t, hostDisconnected)
+		waitNotify(t, hostDisconnected, "host disconnected")
 	})
 
 	t.Run("connect game", func(t *testing.T) {
@@ -63,20 +62,20 @@ func TestClient(t *testing.T) {
 		<-runHost(t, cl, key, done)
 
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
-		_, err := cl.ConnectGame(context.Background(), key, "peer")
+		_, err := cl.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
 
-		waitNotify(t, peerConnected)
+		waitNotify(t, peerConnected, "peer connected")
 		close(done)
 	})
 
-	t.Run("connect to non-existing game", func(t *testing.T) {
+	t.Run("connect to non-existing host", func(t *testing.T) {
 		srv := apitest.NewServer(t, secret, newRegistar(t))
 		cl := srv.Client(t, secret)
 		key := auth.NewKey()
-		_, err := cl.ConnectGame(context.Background(), key, "peer")
+		_, err := cl.ConnectToHost(context.Background(), key, "peer")
 		if !httpplatform.IsNotFound(err) {
 			t.Errorf("expected NotFound error, got: %s", err)
 		}
@@ -85,12 +84,12 @@ func TestClient(t *testing.T) {
 	t.Run("invalid secret", func(t *testing.T) {
 		srv := apitest.NewServer(t, secret, newRegistar(t))
 		cl := srv.Client(t, []byte("invalid secret"))
-		_, err := cl.RegisterGame(context.Background(), auth.NewKey())
+		_, err := cl.RegisterHost(context.Background(), auth.NewKey())
 		if !httpplatform.IsUnauthorized(err) {
 			t.Errorf("expected Unauthorized error, got: %s", err)
 		}
 
-		_, err = cl.ConnectGame(context.Background(), auth.NewKey(), "peer")
+		_, err = cl.ConnectToHost(context.Background(), auth.NewKey(), "peer")
 		if !httpplatform.IsUnauthorized(err) {
 			t.Errorf("expected Unauthorized error, got: %s", err)
 		}
@@ -112,15 +111,15 @@ func TestClient(t *testing.T) {
 		<-runHost(t, srv.Client(t, secret), key, peerDone)
 
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
-		peerDisconnected := notifyPeerDisconnected(t, svc, key, "peer", nil)
+		peerDisconnected := notifyPeerDisconnected(t, svc, key, "peer", clientCloseErr)
 		peer := srv.Client(t, secret)
-		_, err := peer.ConnectGame(context.Background(), key, "peer")
+		_, err := peer.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
 
 		// wait for peer to be accepted
-		waitNotify(t, peerConnected)
+		waitNotify(t, peerConnected, "peer connected")
 		if want, got := 1, len(svc.Peers(key)); want != got {
 			t.Errorf("unexpected number of peers, want: %d, got: %d", want, got)
 		}
@@ -136,7 +135,7 @@ func TestClient(t *testing.T) {
 
 		close(peerDone)
 
-		waitNotify(t, hostDisconnected)
+		waitNotify(t, hostDisconnected, "host disconnected")
 	})
 
 	t.Run("peer closes stream", func(t *testing.T) {
@@ -152,13 +151,13 @@ func TestClient(t *testing.T) {
 		peerConnected := notifyPeerConnected(t, svc, key, "peer")
 		peerDisconnected := notifyPeerDisconnected(t, svc, key, "peer", nil)
 		peer := srv.Client(t, secret)
-		peerStream, err := peer.ConnectGame(context.Background(), key, "peer")
+		peerStream, err := peer.ConnectToHost(context.Background(), key, "peer")
 		if err != nil {
 			t.Fatalf("connect game: %s", err)
 		}
 
 		// wait for peer to be accepted
-		waitNotify(t, peerConnected)
+		waitNotify(t, peerConnected, "peer connected")
 		if want, got := 1, len(svc.Peers(key)); want != got {
 			t.Errorf("unexpected number of peers, want: %d, got: %d", want, got)
 		}
@@ -166,14 +165,14 @@ func TestClient(t *testing.T) {
 		peerStream.CancelWrite(errcode.Cancelled)
 		peerStream.CancelRead(errcode.Cancelled)
 
-		waitNotify(t, peerDisconnected)
+		waitNotify(t, peerDisconnected, "peer disconnected")
 		if want, got := 0, len(svc.Peers(key)); want != got {
 			t.Errorf("unexpected number of peers, want: %d, got: %d", want, got)
 		}
 
 		close(peerDone)
 
-		waitNotify(t, hostDisconnected)
+		waitNotify(t, hostDisconnected, "host disconnected")
 	})
 }
 
@@ -181,33 +180,30 @@ func runHost(t *testing.T, client *api.Client, key auth.Key, done <-chan struct{
 	registered := make(chan struct{})
 	var eg errgroup.Group
 	eg.Go(func() error {
-		conn, err := client.RegisterGame(context.Background(), key)
+		controlStream, err := client.RegisterHost(context.Background(), key)
 		if err != nil {
 			return fmt.Errorf("register game: %s", err)
 		}
 
 		close(registered)
 
-		// accept stream from the server
-		stream, err := conn.AcceptStream(context.Background())
-		if err != nil {
-			return fmt.Errorf("accept stream: %s", err)
-		}
-
-		controlConn := http3platform.NewStreamConn(stream, conn.LocalAddr(), conn.RemoteAddr())
-		l := control.Listen(controlConn, client, key)
-		peerConn, err := l.AcceptForward()
+		l := control.Listen(controlStream, client, key)
+		peerStream, err := l.AcceptForward()
 		if err != nil {
 			return fmt.Errorf("accept forward: %s", err)
 		}
 
 		<-done
 
-		if err := peerConn.Close(); err != nil {
+		if err := peerStream.Close(); err != nil {
 			return fmt.Errorf("close peer conn: %s", err)
 		}
 
-		return conn.CloseWithError(errcode.Exit, "host shutdown")
+		if err := controlStream.Close(); err != nil {
+			return fmt.Errorf("close control stream: %s", err)
+		}
+
+		return client.Close()
 	})
 
 	t.Cleanup(func() {
@@ -287,12 +283,12 @@ func notifyHostDisconnected(t *testing.T, svc *registar.Registar, key auth.Key, 
 	return hostDisconnected
 }
 
-func waitNotify(t *testing.T, ch <-chan struct{}) {
+func waitNotify(t *testing.T, ch <-chan struct{}, reason string) {
 	t.Helper()
 
 	select {
 	case <-ch:
 	case <-time.After(5 * time.Second):
-		t.Error("timeout waiting for notification")
+		t.Errorf("timeout waiting for notification: %s", reason)
 	}
 }

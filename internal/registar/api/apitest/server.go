@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/dmksnnk/star/internal/platform/http3/http3test"
+	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/api"
 )
