@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/dmksnnk/star/internal/errcode"
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/quic-go/quic-go"
@@ -118,15 +119,16 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 				return fmt.Errorf("accept: %w", err)
 			}
 
-			c.logger.Debug("serving connection", "remote_addr", qConn.RemoteAddr().String())
-			if err := srv.ServeQUICConn(qConn); err != nil {
+			served := make(chan error)
+			go func() {
+				c.logger.Debug("serving connection", "remote_addr", qConn.RemoteAddr().String())
+				served <- srv.ServeQUICConn(qConn)
+			}()
+
+			select {
+			case err := <-served:
 				if errors.Is(err, http.ErrServerClosed) {
 					return nil
-				}
-
-				var toErr *quic.IdleTimeoutError
-				if errors.As(err, &toErr) && toErr.Timeout() {
-					continue
 				}
 
 				var appErr *quic.ApplicationError
@@ -136,15 +138,46 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 						c.logger.Debug("client cancelled request")
 						continue
 					}
-					// stop server
-					if appErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeRequestRejected) {
-						c.logger.Debug("server stopped")
+				}
+				return fmt.Errorf("serve QUIC conn: %w", err)
+			case <-serveCtx.Done():
+				c.logger.Debug("closing connection")
+				err := fmt.Errorf("server serve cancelled: %w", context.Cause(serveCtx))
+				qConn.CloseWithError(quic.ApplicationErrorCode(errcode.Cancelled), err.Error())
+				// wait for goroutine to exit
+				err = <-served
+				var appErr *quic.ApplicationError
+				if errors.As(err, &appErr) {
+					// close connection from above
+					if appErr.ErrorCode == quic.ApplicationErrorCode(errcode.Cancelled) {
 						return nil
 					}
 				}
-
-				return fmt.Errorf("serve QUIC conn: %w", err)
+				if errors.Is(err, http.ErrServerClosed) {
+					return nil
+				}
+				return err
 			}
+
+			// var toErr *quic.IdleTimeoutError
+			// if errors.As(err, &toErr) && toErr.Timeout() {
+			// 	continue
+			// }
+
+			// var appErr *quic.ApplicationError
+			// if errors.As(err, &appErr) {
+			// 	// client cancelled request
+			// 	if appErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeRequestCanceled) {
+			// 		c.logger.Debug("client cancelled request")
+			// 		continue
+			// 	}
+			// 	// stop server
+			// 	if appErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeRequestRejected) {
+			// 		c.logger.Debug("server stopped")
+			// 		return nil
+			// 	}
+			// }
+
 		}
 	})
 
@@ -174,7 +207,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 
 				if errors.Is(err, errConnectionRejected) {
 					c.logger.Debug("public dial rejected by peer, retrying")
-					conn.CloseWithError(http3.ErrCodeRequestRejected, "closing after rejection")
+					conn.CloseWithError(http3.ErrCodeRequestCanceled, "closing after rejection")
 					continue
 				}
 				if errors.Is(err, context.Canceled) {
@@ -220,7 +253,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 				}
 				if errors.Is(err, errConnectionRejected) {
 					c.logger.Debug("private dial rejected by peer, retrying")
-					conn.CloseWithError(http3.ErrCodeRequestRejected, "closing after rejection")
+					conn.CloseWithError(http3.ErrCodeRequestCanceled, "closing after rejection")
 					continue
 				}
 				if errors.Is(err, context.Canceled) {
@@ -244,7 +277,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 	select {
 	case stream := <-accepted:
 		earlyListener.Close()
-		serveCancel()
+		// serveCancel()
 		publicReqCancel()
 		privateReqCancel()
 		c.logger.Info("connection established via server")
@@ -252,18 +285,21 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 	case stream := <-publicDialled:
 		earlyListener.Close()
 		serveCancel()
+		srv.Close()
 		privateReqCancel()
 		c.logger.Info("connection established via public dial")
 		return stream, eg.Wait()
 	case stream := <-privateDialled:
 		earlyListener.Close()
 		serveCancel()
+		srv.Close()
 		publicReqCancel()
 		c.logger.Info("connection established via private dial")
 		return stream, eg.Wait()
 	case <-ctx.Done():
 		earlyListener.Close()
 		serveCancel()
+		srv.Close()
 		publicReqCancel()
 		privateReqCancel()
 		return nil, eg.Wait()
