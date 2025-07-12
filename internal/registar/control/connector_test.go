@@ -20,7 +20,6 @@ import (
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -62,29 +61,7 @@ func TestConnectorLocalhost(t *testing.T) {
 		t.Fatalf("wait: %s", err)
 	}
 
-	fmt.Println("established, running tests")
-
-	want := make([]byte, 1<<20)
-	rand.Read(want)
-
-	go func() {
-		if _, err := io.Copy(stream1, bytes.NewReader(want)); err != nil {
-			t.Errorf("unexpected stream1.Write error: %s", err)
-		}
-	}()
-
-	data := make(chan []byte)
-	go func() {
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, stream2); err != nil {
-			t.Errorf("unexpected stream2.Read error: %s", err)
-		}
-		data <- buf.Bytes()
-	}()
-
-	if got := <-data; !bytes.Equal(got, want) {
-		t.Error("transmitted data differs")
-	}
+	runConnTest(t, stream1, stream2)
 }
 
 func newPeer(t *testing.T, name string) (*control.Connector, net.PacketConn) {
@@ -130,19 +107,44 @@ func newPeer(t *testing.T, name string) (*control.Connector, net.PacketConn) {
 				PrivateKey:  privkey,
 			},
 		},
-		RootCAs:    pool,
-		NextProtos: []string{http3.NextProtoH3},
-	}
-
-	quicConfig := &quic.Config{
-		EnableDatagrams:      true,
-		HandshakeIdleTimeout: time.Second,
+		RootCAs: pool,
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	logger = logger.With("connector", name)
-	connector := control.NewConnector(transport, tlsConfig, quicConfig, logger)
+	connector := control.NewConnector(transport, tlsConfig, control.WithLogger(logger))
 	return connector, conn
+}
+
+func runConnTest(t *testing.T, conn1, conn2 io.ReadWriteCloser) {
+	t.Helper()
+	want := make([]byte, 1<<20)
+	rand.Read(want)
+
+	go func() {
+		if _, err := io.Copy(conn1, bytes.NewReader(want)); err != nil {
+			t.Errorf("unexpected conn1.Write error: %s", err)
+		}
+		if err := conn1.Close(); err != nil {
+			t.Errorf("unexpected conn1.Close error: %s", err)
+		}
+	}()
+
+	data := make(chan []byte)
+	go func() {
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, conn2); err != nil {
+			t.Errorf("unexpected conn2.Read error: %s", err)
+		}
+		if err := conn2.Close(); err != nil {
+			t.Errorf("unexpected conn2.Close error: %s", err)
+		}
+		data <- buf.Bytes()
+	}()
+
+	if got := <-data; !bytes.Equal(got, want) {
+		t.Error("transmitted data differs")
+	}
 }
 
 func TestConnectorLocal(t *testing.T) {
