@@ -151,8 +151,9 @@ func TestConnectorLocal(t *testing.T) {
 	peer1Cmd := exec.Command("./peer")
 	peer1Cmd.Env = []string{
 		"LISTEN_ADDRESS=127.0.0.1:8001",
-		"PEER_PUBLIC_ADDRESS=127.0.0.1:8002",
+		"PEER_PUBLIC_ADDRESS=127.0.0.1:8002", // peer2 address
 		"PEER_PRIVATE_ADDRESS=127.0.0.1:8003",
+		"MODE=client",
 	}
 	peer1Cmd.Stdout = os.Stdout
 	peer1Cmd.Stderr = os.Stderr
@@ -162,6 +163,7 @@ func TestConnectorLocal(t *testing.T) {
 		"LISTEN_ADDRESS=127.0.0.1:8002",      // public address
 		"PEER_PUBLIC_ADDRESS=127.0.0.1:8001", // peer1 address
 		"PEER_PRIVATE_ADDRESS=127.0.0.1:8004",
+		"MODE=server",
 	}
 	peer2Cmd.Stdout = os.Stdout
 	peer2Cmd.Stderr = os.Stderr
