@@ -159,7 +159,7 @@ func TestConnectorLocal(t *testing.T) {
 	peer1Cmd.Env = []string{
 		"LISTEN_ADDRESS=127.0.0.1:8001",
 		"PEER_PUBLIC_ADDRESS=127.0.0.1:8002", // peer2 address
-		"PEER_PRIVATE_ADDRESS=127.0.0.1:8003",
+		"PEER_PRIVATE_ADDRESS=127.0.0.1:8002",
 		"TLS_IPS=127.0.0.1",
 		"MODE=client",
 	}
@@ -170,7 +170,7 @@ func TestConnectorLocal(t *testing.T) {
 	peer2Cmd.Env = []string{
 		"LISTEN_ADDRESS=127.0.0.1:8002",      // public address
 		"PEER_PUBLIC_ADDRESS=127.0.0.1:8001", // peer1 address
-		"PEER_PRIVATE_ADDRESS=127.0.0.1:8004",
+		"PEER_PRIVATE_ADDRESS=127.0.0.1:8001",
 		"TLS_IPS=127.0.0.1",
 		"MODE=server",
 	}
@@ -210,17 +210,19 @@ func TestConnectorSingleSwitch(t *testing.T) {
 	}
 
 	peer1, err := n.AddHost("peer1",
+		gontops.DefaultGatewayIP("10.0.1.1"),
 		gont.NewInterface("veth0", sw1,
 			gontops.AddressIP("10.0.1.2/24")))
 	if err != nil {
-		t.Fatalf("create host1: %v", err)
+		t.Fatalf("create peer1: %v", err)
 	}
 
 	peer2, err := n.AddHost("peer2",
+		gontops.DefaultGatewayIP("10.0.1.1"),
 		gont.NewInterface("veth0", sw1,
 			gontops.AddressIP("10.0.1.3/24")))
 	if err != nil {
-		t.Fatalf("create host2: %v", err)
+		t.Fatalf("create peer2: %v", err)
 	}
 
 	_, err = peer1.Ping(peer2)
@@ -230,10 +232,10 @@ func TestConnectorSingleSwitch(t *testing.T) {
 
 	peer1Cmd := peer1.Command("./peer",
 		cmdops.Envs([]string{
-			"LISTEN_ADDRESS=:8000",
+			"LISTEN_ADDRESS=10.0.1.2:8000",
 			"PEER_PUBLIC_ADDRESS=10.0.1.3:8000",  // peer2 address
 			"PEER_PRIVATE_ADDRESS=10.0.1.3:8000", // peer2 address
-			"TLS_IPS=10.0.1.2",
+			"TLS_IPS=10.0.1.2,10.0.0.1",
 			"MODE=client",
 		}),
 		cmdops.Stderr(os.Stderr),
@@ -245,7 +247,7 @@ func TestConnectorSingleSwitch(t *testing.T) {
 			"LISTEN_ADDRESS=:8000",
 			"PEER_PUBLIC_ADDRESS=10.0.1.2:8000",  // peer1 address
 			"PEER_PRIVATE_ADDRESS=10.0.1.2:8000", // peer1 address
-			"TLS_IPS=10.0.1.3",
+			"TLS_IPS=10.0.1.3,10.0.1.1",
 			"MODE=server",
 		}),
 		cmdops.Stderr(os.Stderr),
@@ -267,7 +269,7 @@ func TestConnectorSingleSwitch(t *testing.T) {
 
 // TestConnectorNAT
 //
-//	peer1 <-> sw1 <-> nat1 <-> sw1 <-> peer2
+//	peer1 <-> sw1 <-> nat1 <-> sw2 <-> peer2
 func TestConnectorNAT(t *testing.T) {
 	n, err := gont.NewNetwork(t.Name())
 	if err != nil {
@@ -294,7 +296,7 @@ func TestConnectorNAT(t *testing.T) {
 		gont.NewInterface("veth0", sw1,
 			gontops.AddressIP("10.0.1.2/24")))
 	if err != nil {
-		t.Fatalf("create host client: %v", err)
+		t.Fatalf("create peer1 host: %v", err)
 	}
 
 	peer2, err := n.AddHost("peer2",
@@ -302,7 +304,7 @@ func TestConnectorNAT(t *testing.T) {
 		gont.NewInterface("veth0", sw2,
 			gontops.AddressIP("10.0.2.2/24")))
 	if err != nil {
-		t.Fatalf("create host server: %v", err)
+		t.Fatalf("create peer2 host: %v", err)
 	}
 
 	_, err = n.AddNAT("nat1",

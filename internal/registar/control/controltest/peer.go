@@ -79,9 +79,6 @@ func main() {
 	}
 	slog.Info("connected")
 
-	want := make([]byte, 1<<20)
-	rand.Read(want)
-
 	if cfg.Mode == "client" {
 		runClient(stream)
 	} else {
@@ -161,23 +158,6 @@ func newTLSConfig(ca tls.Certificate, ips []net.IP) (*tls.Config, error) {
 		},
 		RootCAs: pool,
 	}, nil
-}
-
-func findLocalIP() (net.IP, error) {
-	slog.Info("trying to find a local IP")
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil, fmt.Errorf("get interface addresses: %w", err)
-	}
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				slog.Info("found local IP", "ip", ipnet.IP.String())
-				return ipnet.IP, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("could not find a suitable local IP")
 }
 
 func caCert() (tls.Certificate, error) {

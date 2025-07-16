@@ -103,7 +103,8 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 
 			select {
 			case accepted <- &Stream{conn, stream}:
-				c.logger.Debug("accepted connection", "remote_addr", conn.RemoteAddr().String())
+				c.logger.Debug("accepted connection",
+					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
 			case <-acceptCtx.Done():
 				err := fmt.Errorf("server connection cancelled: %w", context.Cause(acceptCtx))
@@ -157,7 +158,8 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 
 			select {
 			case publicDialled <- &Stream{conn, stream}:
-				c.logger.Debug("established connection to public adddress", "remote_addr", conn.RemoteAddr().String())
+				c.logger.Debug("established connection to public adddress",
+					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
 			case <-publicReqCtx.Done():
 				err := fmt.Errorf("public connection cancelled: %w", context.Cause(publicReqCtx))
@@ -166,58 +168,61 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 		}
 	})
 
-	privateDialled := make(chan *Stream)
+	var privateDialled chan *Stream // created as nil, so select ignores it
 	privateReqCtx, privateReqCancel := context.WithCancel(ctx)
 	defer privateReqCancel()
-	eg.Go(func() error {
-		for {
-			conn, err := c.dial(privateReqCtx, private)
-			if err != nil {
-				// if isHandshakeTimeoutError(err) {
-				// 	continue
-				// }
-				if errors.Is(err, context.Canceled) {
-					return nil
+	if public != private { // TODO: refactor
+		privateDialled = make(chan *Stream)
+		eg.Go(func() error {
+			for {
+				conn, err := c.dial(privateReqCtx, private)
+				if err != nil {
+					// if isHandshakeTimeoutError(err) {
+					// 	continue
+					// }
+					if errors.Is(err, context.Canceled) {
+						return nil
+					}
+
+					return fmt.Errorf("dial private address: %w", err)
 				}
 
-				return fmt.Errorf("dial private address: %w", err)
-			}
-
-			state := conn.ConnectionState()
-			if !state.SupportsDatagrams {
-				c.logger.Debug("server has not enabled datagrams")
-				conn.CloseWithError(errcodeCancelled, "datagrams are not enabled")
-				continue
-			}
-
-			stream, err := c.sendRequest(privateReqCtx, conn)
-			if err != nil {
-				// if isHandshakeTimeoutError(err) {
-				// continue
-				// }
-				if errors.Is(err, errConnectionRejected) {
-					c.logger.Debug("dial private address rejected by peer, retrying")
-					conn.CloseWithError(errcodeCancelled, "closing after rejection")
+				state := conn.ConnectionState()
+				if !state.SupportsDatagrams {
+					c.logger.Debug("server has not enabled datagrams")
+					conn.CloseWithError(errcodeCancelled, "datagrams are not enabled")
 					continue
 				}
-				if errors.Is(err, context.Canceled) {
+
+				stream, err := c.sendRequest(privateReqCtx, conn)
+				if err != nil {
+					// if isHandshakeTimeoutError(err) {
+					// continue
+					// }
+					if errors.Is(err, errConnectionRejected) {
+						c.logger.Debug("dial private address rejected by peer, retrying")
+						conn.CloseWithError(errcodeCancelled, "closing after rejection")
+						continue
+					}
+					if errors.Is(err, context.Canceled) {
+						err := fmt.Errorf("private connection cancelled: %w", context.Cause(privateReqCtx))
+						return conn.CloseWithError(errcodeCancelled, err.Error())
+					}
+
+					return fmt.Errorf("send request to private address: %w", err)
+				}
+
+				select {
+				case privateDialled <- &Stream{conn, stream}:
+					c.logger.Debug("established connetion to private address", "remote_addr", conn.RemoteAddr().String())
+					return nil
+				case <-privateReqCtx.Done():
 					err := fmt.Errorf("private connection cancelled: %w", context.Cause(privateReqCtx))
 					return conn.CloseWithError(errcodeCancelled, err.Error())
 				}
-
-				return fmt.Errorf("send request to private address: %w", err)
 			}
-
-			select {
-			case privateDialled <- &Stream{conn, stream}:
-				c.logger.Debug("established connetion to private address", "remote_addr", conn.RemoteAddr().String())
-				return nil
-			case <-privateReqCtx.Done():
-				err := fmt.Errorf("private connection cancelled: %w", context.Cause(privateReqCtx))
-				return conn.CloseWithError(errcodeCancelled, err.Error())
-			}
-		}
-	})
+		})
+	}
 
 	select {
 	case stream := <-accepted:
