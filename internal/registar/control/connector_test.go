@@ -21,6 +21,10 @@ import (
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
+
+	gont "cunicu.li/gont/v2/pkg"
+	gontops "cunicu.li/gont/v2/pkg/options"
+	cmdops "cunicu.li/gont/v2/pkg/options/cmd"
 )
 
 var (
@@ -92,7 +96,7 @@ func newPeer(t *testing.T, name string) (*control.Connector, net.PacketConn) {
 	if err != nil {
 		t.Fatal("create server private key:", err)
 	}
-	peerCert, err := cert.NewIPCert(ca, caPrivateKey, addr.IP, privkey.Public())
+	peerCert, err := cert.NewIPCert(ca, caPrivateKey, privkey.Public(), addr.IP)
 	if err != nil {
 		t.Fatalf("create IP cert: %s", err)
 	}
@@ -147,12 +151,16 @@ func runConnTest(t *testing.T, conn1, conn2 io.ReadWriteCloser) {
 	}
 }
 
+// TODO: make test working via CMD, then try to make test working via Dockerfile,
+// so it is possible to run all of the locally without test helper scripts.
+
 func TestConnectorLocal(t *testing.T) {
 	peer1Cmd := exec.Command("./peer")
 	peer1Cmd.Env = []string{
 		"LISTEN_ADDRESS=127.0.0.1:8001",
 		"PEER_PUBLIC_ADDRESS=127.0.0.1:8002", // peer2 address
 		"PEER_PRIVATE_ADDRESS=127.0.0.1:8003",
+		"TLS_IPS=127.0.0.1",
 		"MODE=client",
 	}
 	peer1Cmd.Stdout = os.Stdout
@@ -163,6 +171,7 @@ func TestConnectorLocal(t *testing.T) {
 		"LISTEN_ADDRESS=127.0.0.1:8002",      // public address
 		"PEER_PUBLIC_ADDRESS=127.0.0.1:8001", // peer1 address
 		"PEER_PRIVATE_ADDRESS=127.0.0.1:8004",
+		"TLS_IPS=127.0.0.1",
 		"MODE=server",
 	}
 	peer2Cmd.Stdout = os.Stdout
@@ -181,280 +190,168 @@ func TestConnectorLocal(t *testing.T) {
 	}
 }
 
-// TestConnectorBasic tests
-// func TestConnectorBasic(t *testing.T) {
-// 	n, err := gont.NewNetwork(t.Name())
-// 	if err != nil {
-// 		t.Fatalf("create network: %s", err)
-// 	}
-// 	t.Cleanup(func() {
-// 		if err := n.Close(); err != nil {
-// 			t.Errorf("close network: %s", err)
-// 		}
-// 	})
+// TestConnectorSingleSwitch tests connection over single switch.
+//
+//	peer1 <-> sw1 <-> peer2
+func TestConnectorSingleSwitch(t *testing.T) {
+	n, err := gont.NewNetwork(t.Name())
+	if err != nil {
+		t.Fatalf("create network: %s", err)
+	}
+	t.Cleanup(func() {
+		if err := n.Close(); err != nil {
+			t.Errorf("close network: %s", err)
+		}
+	})
 
-// 	sw1, err := n.AddSwitch("sw1")
-// 	if err != nil {
-// 		t.Fatalf("create switch sw1: %v", err)
-// 	}
+	sw1, err := n.AddSwitch("sw1")
+	if err != nil {
+		t.Fatalf("create switch sw1: %v", err)
+	}
 
-// 	host1, err := n.AddHost("host1",
-// 		gontops.DefaultGatewayIP("10.0.1.1"),
-// 		gont.NewInterface("veth0", sw1,
-// 			gontops.AddressIP("10.0.1.2/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host1: %v", err)
-// 	}
+	peer1, err := n.AddHost("peer1",
+		gont.NewInterface("veth0", sw1,
+			gontops.AddressIP("10.0.1.2/24")))
+	if err != nil {
+		t.Fatalf("create host1: %v", err)
+	}
 
-// 	host2, err := n.AddHost("host2",
-// 		gontops.DefaultGatewayIP("10.0.1.1"),
-// 		gont.NewInterface("veth0", sw1,
-// 			gontops.AddressIP("10.0.1.3/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host2: %v", err)
-// 	}
+	peer2, err := n.AddHost("peer2",
+		gont.NewInterface("veth0", sw1,
+			gontops.AddressIP("10.0.1.3/24")))
+	if err != nil {
+		t.Fatalf("create host2: %v", err)
+	}
 
-// 	_, err = host1.Ping(host2)
-// 	if err != nil {
-// 		t.Fatalf("Failed to ping host1 -> host2: %v", err)
-// 	}
+	_, err = peer1.Ping(peer2)
+	if err != nil {
+		t.Fatalf("Failed to ping peer1 -> peer2: %v", err)
+	}
 
-// 	serverCmd, err := host2.Start("go", "run", "./cmd/registar/...",
-// 		cmdops.EnvVar("CERT_IP_ADDRESS", "10.0.1.3"),
-// 		cmdops.EnvVar("LISTEN_TLS_ADDRESS", "10.0.1.3:8443"),
-// 		cmdops.EnvVar("SECRET", "test_secret"),
-// 		cmdops.EnvVar("LOG_LEVEL", "DEBUG"),
-// 		cmdops.Stdout(os.Stdout),
-// 		cmdops.Stderr(os.Stderr),
-// 	)
-// 	if err != nil {
-// 		t.Fatalf("start registar server: %s", err)
-// 	}
-// 	t.Cleanup(func() {
-// 		if err := serverCmd.Process.Signal(syscall.SIGINT); err != nil {
-// 			t.Errorf("failed to send SIGINT to server: %v", err)
-// 		}
-// 		if err := serverCmd.Wait(); err != nil {
-// 			t.Errorf("server exited with error: %v", err)
-// 		}
-// 	})
+	peer1Cmd := peer1.Command("./peer",
+		cmdops.Envs([]string{
+			"LISTEN_ADDRESS=:8000",
+			"PEER_PUBLIC_ADDRESS=10.0.1.3:8000",  // peer2 address
+			"PEER_PRIVATE_ADDRESS=10.0.1.3:8000", // peer2 address
+			"TLS_IPS=10.0.1.2",
+			"MODE=client",
+		}),
+		cmdops.Stderr(os.Stderr),
+		cmdops.Stdout(os.Stdout),
+	)
 
-// 	time.Sleep(2 * time.Second)
+	peer2Cmd := peer2.Command("./peer",
+		cmdops.Envs([]string{
+			"LISTEN_ADDRESS=:8000",
+			"PEER_PUBLIC_ADDRESS=10.0.1.2:8000",  // peer1 address
+			"PEER_PRIVATE_ADDRESS=10.0.1.2:8000", // peer1 address
+			"TLS_IPS=10.0.1.3",
+			"MODE=server",
+		}),
+		cmdops.Stderr(os.Stderr),
+		cmdops.Stdout(os.Stdout),
+	)
 
-// 	transport := &quic.Transport{}
-// 	defer transport.Close()
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return peer1Cmd.Run()
+	})
+	eg.Go(func() error {
+		return peer2Cmd.Run()
+	})
 
-// 	tlsConfig := &tls.Config{
-// 		InsecureSkipVerify: true,
-// 	}
+	if err := eg.Wait(); err != nil {
+		t.Errorf("failed: %v", err)
+	}
+}
 
-// 	quicConfig := &quic.Config{
-// 		EnableDatagrams: true,
-// 	}
+// TestConnectorNAT
+//
+//	peer1 <-> sw1 <-> nat1 <-> sw1 <-> peer2
+func TestConnectorNAT(t *testing.T) {
+	n, err := gont.NewNetwork(t.Name())
+	if err != nil {
+		t.Fatalf("create network: %s", err)
+	}
+	t.Cleanup(func() {
+		if err := n.Close(); err != nil {
+			t.Errorf("close network: %s", err)
+		}
+	})
 
-// 	connector := control.NewConnector(transport, tlsConfig, quicConfig)
+	sw1, err := n.AddSwitch("sw1")
+	if err != nil {
+		t.Fatalf("create switch sw1: %v", err)
+	}
 
-// 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-// 	defer cancel()
+	sw2, err := n.AddSwitch("sw2")
+	if err != nil {
+		t.Fatalf("create switch sw2: %v", err)
+	}
 
-// 	publicAddr := netip.MustParseAddrPort("10.0.1.3:8443")
-// 	privateAddr := netip.MustParseAddrPort("10.0.1.3:8443")
+	peer1, err := n.AddHost("peer1",
+		gontops.DefaultGatewayIP("10.0.1.1"),
+		gont.NewInterface("veth0", sw1,
+			gontops.AddressIP("10.0.1.2/24")))
+	if err != nil {
+		t.Fatalf("create host client: %v", err)
+	}
 
-// 	stream, err := connector.Connect(ctx, publicAddr, privateAddr)
-// 	if err != nil {
-// 		t.Fatalf("connector.Connect failed: %v", err)
-// 	}
-// 	defer stream.Close()
+	peer2, err := n.AddHost("peer2",
+		gontops.DefaultGatewayIP("10.0.2.1"),
+		gont.NewInterface("veth0", sw2,
+			gontops.AddressIP("10.0.2.2/24")))
+	if err != nil {
+		t.Fatalf("create host server: %v", err)
+	}
 
-// 	if stream == nil {
-// 		t.Fatal("expected non-nil stream")
-// 	}
-// }
+	_, err = n.AddNAT("nat1",
+		gont.NewInterface("veth0", sw1, gontops.SouthBound,
+			gontops.AddressIP("10.0.1.1/24")),
+		gont.NewInterface("veth1", sw2, gontops.NorthBound,
+			gontops.AddressIP("10.0.2.1/24")))
+	if err != nil {
+		t.Fatalf("create NAT: %s", err)
+	}
 
-// func TestConnectorNATScenario(t *testing.T) {
-// 	n, err := gont.NewNetwork(t.Name())
-// 	if err != nil {
-// 		t.Fatalf("create network: %s", err)
-// 	}
-// 	t.Cleanup(func() {
-// 		if err := n.Close(); err != nil {
-// 			t.Errorf("close network: %s", err)
-// 		}
-// 	})
+	_, err = peer1.Ping(peer2)
+	if err != nil {
+		t.Fatalf("Failed to ping peer1 -> peer2: %v", err)
+	}
 
-// 	sw1, err := n.AddSwitch("sw1")
-// 	if err != nil {
-// 		t.Fatalf("create switch sw1: %v", err)
-// 	}
+	peer1Cmd := peer1.Command("./peer",
+		cmdops.Envs([]string{
+			"LISTEN_ADDRESS=:8000",
+			"PEER_PUBLIC_ADDRESS=10.0.1.1:8000", // public address of peer2, as seen through NAT
+			"PEER_PRIVATE_ADDRESS=10.0.2.2:8000",
+			"TLS_IPS=10.0.1.2,10.0.2.1",
+			"MODE=client",
+		}),
+		cmdops.Stderr(os.Stderr),
+		cmdops.Stdout(os.Stdout),
+	)
 
-// 	sw2, err := n.AddSwitch("sw2")
-// 	if err != nil {
-// 		t.Fatalf("create switch sw2: %v", err)
-// 	}
+	peer2Cmd := peer2.Command("./peer",
+		cmdops.Envs([]string{
+			"LISTEN_ADDRESS=:8000",
+			"PEER_PUBLIC_ADDRESS=10.0.2.1:8000", // public address of peer1, as seen trough NAT
+			"PEER_PRIVATE_ADDRESS=10.0.1.2:8000",
+			"TLS_IPS=10.0.2.2,10.0.1.1",
+			"MODE=server",
+		}),
+		cmdops.Stderr(os.Stderr),
+		cmdops.Stdout(os.Stdout),
+	)
 
-// 	client, err := n.AddHost("client",
-// 		gontops.DefaultGatewayIP("10.0.1.1"),
-// 		gont.NewInterface("veth0", sw1,
-// 			gontops.AddressIP("10.0.1.2/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host client: %v", err)
-// 	}
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return peer1Cmd.Run()
+	})
+	eg.Go(func() error {
+		return peer2Cmd.Run()
+	})
 
-// 	server, err := n.AddHost("server",
-// 		gontops.DefaultGatewayIP("10.0.2.1"),
-// 		gont.NewInterface("veth0", sw2,
-// 			gontops.AddressIP("10.0.2.2/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host server: %v", err)
-// 	}
-
-// 	_, err = n.AddNAT("nat1",
-// 		gont.NewInterface("veth0", sw1, gontops.SouthBound,
-// 			gontops.AddressIP("10.0.1.1/24")),
-// 		gont.NewInterface("veth1", sw2, gontops.NorthBound,
-// 			gontops.AddressIP("10.0.2.1/24")))
-// 	if err != nil {
-// 		t.Fatalf("create NAT: %s", err)
-// 	}
-
-// 	_, err = client.Ping(server)
-// 	if err != nil {
-// 		t.Fatalf("Failed to ping client -> server: %v", err)
-// 	}
-
-// 	serverCmd, err := server.Start("go", "run", "./cmd/registar/...",
-// 		cmdops.EnvVar("CERT_IP_ADDRESS", "10.0.2.2"),
-// 		cmdops.EnvVar("LISTEN_TLS_ADDRESS", "10.0.2.2:8443"),
-// 		cmdops.EnvVar("SECRET", "test_secret"),
-// 		cmdops.EnvVar("LOG_LEVEL", "DEBUG"),
-// 		cmdops.Stdout(os.Stdout),
-// 		cmdops.Stderr(os.Stderr),
-// 	)
-// 	if err != nil {
-// 		t.Fatalf("start registar server: %s", err)
-// 	}
-// 	t.Cleanup(func() {
-// 		if err := serverCmd.Process.Signal(syscall.SIGINT); err != nil {
-// 			t.Errorf("failed to send SIGINT to server: %v", err)
-// 		}
-// 		if err := serverCmd.Wait(); err != nil {
-// 			t.Errorf("server exited with error: %v", err)
-// 		}
-// 	})
-
-// 	time.Sleep(2 * time.Second)
-
-// 	_, err = client.Run("go", "run", "./test_connector_client.go",
-// 		cmdops.EnvVar("SERVER_PUBLIC", "10.0.2.2:8443"),
-// 		cmdops.EnvVar("SERVER_PRIVATE", "10.0.2.2:8443"),
-// 		cmdops.Stdout(os.Stdout),
-// 		cmdops.Stderr(os.Stderr),
-// 	)
-// 	if err != nil {
-// 		t.Errorf("run connector client: %s", err)
-// 	}
-// }
-
-// func TestConnectorTimeout(t *testing.T) {
-// 	transport := &quic.Transport{}
-// 	defer transport.Close()
-
-// 	tlsConfig := &tls.Config{
-// 		InsecureSkipVerify: true,
-// 	}
-
-// 	quicConfig := &quic.Config{
-// 		EnableDatagrams: true,
-// 	}
-
-// 	connector := control.NewConnector(transport, tlsConfig, quicConfig)
-
-// 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-// 	defer cancel()
-
-// 	publicAddr := netip.MustParseAddrPort("192.0.2.1:8443")
-// 	privateAddr := netip.MustParseAddrPort("192.0.2.1:8443")
-
-// 	_, err := connector.Connect(ctx, publicAddr, privateAddr)
-// 	if err == nil {
-// 		t.Fatal("expected Connect to fail with timeout")
-// 	}
-
-// 	if ctx.Err() != context.DeadlineExceeded {
-// 		t.Errorf("expected context deadline exceeded, got: %v", err)
-// 	}
-// }
-
-// func TestConnectorValidation(t *testing.T) {
-// 	n, err := gont.NewNetwork(t.Name())
-// 	if err != nil {
-// 		t.Fatalf("create network: %s", err)
-// 	}
-// 	t.Cleanup(func() {
-// 		if err := n.Close(); err != nil {
-// 			t.Errorf("close network: %s", err)
-// 		}
-// 	})
-
-// 	sw1, err := n.AddSwitch("sw1")
-// 	if err != nil {
-// 		t.Fatalf("create switch sw1: %v", err)
-// 	}
-
-// 	host1, err := n.AddHost("host1",
-// 		gontops.DefaultGatewayIP("10.0.1.1"),
-// 		gont.NewInterface("veth0", sw1,
-// 			gontops.AddressIP("10.0.1.2/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host1: %v", err)
-// 	}
-
-// 	host2, err := n.AddHost("host2",
-// 		gontops.DefaultGatewayIP("10.0.1.1"),
-// 		gont.NewInterface("veth0", sw1,
-// 			gontops.AddressIP("10.0.1.3/24")))
-// 	if err != nil {
-// 		t.Fatalf("create host2: %v", err)
-// 	}
-
-// 	serverWithoutDatagrams := &http3.Server{
-// 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 			w.WriteHeader(http.StatusOK)
-// 		}),
-// 	}
-
-// 	go func() {
-// 		err := host2.RunFunc(func() error {
-// 			return serverWithoutDatagrams.ListenAndServeTLS("10.0.1.3:8443", "", "")
-// 		})
-// 		if err != nil {
-// 			t.Errorf("server listen error: %v", err)
-// 		}
-// 	}()
-
-// 	time.Sleep(2 * time.Second)
-
-// 	transport := &quic.Transport{}
-// 	defer transport.Close()
-
-// 	tlsConfig := &tls.Config{
-// 		InsecureSkipVerify: true,
-// 	}
-
-// 	quicConfig := &quic.Config{
-// 		EnableDatagrams: false,
-// 	}
-
-// 	connector := control.NewConnector(transport, tlsConfig, quicConfig)
-
-// 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-// 	defer cancel()
-
-// 	publicAddr := netip.MustParseAddrPort("10.0.1.3:8443")
-// 	privateAddr := netip.MustParseAddrPort("10.0.1.3:8443")
-
-// 	_, err = connector.Connect(ctx, publicAddr, privateAddr)
-// 	if err == nil {
-// 		t.Fatal("expected Connect to fail when datagrams are disabled")
-// 	}
-// }
+	if err := eg.Wait(); err != nil {
+		t.Errorf("failed: %v", err)
+	}
+}

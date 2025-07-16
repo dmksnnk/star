@@ -7,12 +7,12 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-test_names="$@"
+TEST_NAMES="$@"
 
 go build -o peer ./peer.go
 go test -c -o ./control.test ../
 
 TEST_NAMES_REGEX=$(echo "$TEST_NAMES" | sed 's/ /|/g')
-sudo ./control.test -test.v -test.run "${TEST_NAMES_REGEX}"
+sudo ./control.test -test.v -test.timeout 30s -test.run ^"${TEST_NAMES_REGEX}"$
 
 rm -f peer control.test
