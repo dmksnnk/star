@@ -7,18 +7,21 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/dmksnnk/star/internal/cert"
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/registar/control"
+	"github.com/dmksnnk/star/internal/registar/control/controltest/config"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 
@@ -43,7 +46,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestConnectorLocalhost(t *testing.T) {
+func TestConnectorLocal(t *testing.T) {
 	peer1, conn1 := newPeer(t, "peer1")
 	peer2, conn2 := newPeer(t, "peer2")
 
@@ -151,31 +154,54 @@ func runConnTest(t *testing.T, conn1, conn2 io.ReadWriteCloser) {
 	}
 }
 
-// TODO: make test working via CMD, then try to make test working via Dockerfile,
-// so it is possible to run all of the locally without test helper scripts.
-
-func TestConnectorLocal(t *testing.T) {
-	peer1Cmd := exec.Command("./peer")
-	peer1Cmd.Env = []string{
-		"LISTEN_ADDRESS=127.0.0.1:8001",
-		"PEER_PUBLIC_ADDRESS=127.0.0.1:8002", // peer2 address
-		"PEER_PRIVATE_ADDRESS=127.0.0.1:8002",
-		"TLS_IPS=127.0.0.1",
-		"MODE=client",
+func newCertConfig(t *testing.T, ips ...net.IP) config.Cert {
+	privkey, err := cert.NewPrivateKey()
+	if err != nil {
+		t.Fatal("create server private key:", err)
 	}
+	certBytes, err := cert.NewIPCert(ca, caPrivateKey, privkey.Public(), ips...)
+	if err != nil {
+		t.Fatalf("create IP cert: %s", err)
+	}
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(privkey)
+	if err != nil {
+		t.Fatalf("marshal private key: %s", err)
+	}
+
+	return config.Cert{
+		CACert:     ca.Raw,
+		Cert:       certBytes,
+		PrivateKey: privBytes,
+	}
+}
+
+func TestConnectorLocalhost(t *testing.T) {
+	peerBin := buildPeer(t)
+
+	cfg1 := config.Config{
+		ListenAddress:      "127.0.0.1:8001",
+		PeerPublicAddress:  "127.0.0.1:8002", // peer2 address
+		PeerPrivateAddress: "127.0.0.1:8002",
+		Mode:               "client",
+		Cert:               newCertConfig(t, net.ParseIP("127.0.0.1")),
+	}
+	peer1Cmd := exec.Command(peerBin)
 	peer1Cmd.Stdout = os.Stdout
 	peer1Cmd.Stderr = os.Stderr
+	peer1Cmd.Stdin = stdinConfig(t, cfg1)
 
-	peer2Cmd := exec.Command("./peer")
-	peer2Cmd.Env = []string{
-		"LISTEN_ADDRESS=127.0.0.1:8002",      // public address
-		"PEER_PUBLIC_ADDRESS=127.0.0.1:8001", // peer1 address
-		"PEER_PRIVATE_ADDRESS=127.0.0.1:8001",
-		"TLS_IPS=127.0.0.1",
-		"MODE=server",
+	cfg2 := config.Config{
+		ListenAddress:      "127.0.0.1:8002", // public address
+		PeerPublicAddress:  "127.0.0.1:8001", // peer1 address
+		PeerPrivateAddress: "127.0.0.1:8001",
+		Mode:               "server",
+		Cert:               newCertConfig(t, net.ParseIP("127.0.0.1")),
 	}
+	peer2Cmd := exec.Command(peerBin)
 	peer2Cmd.Stdout = os.Stdout
 	peer2Cmd.Stderr = os.Stderr
+	peer2Cmd.Stdin = stdinConfig(t, cfg2)
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -194,6 +220,8 @@ func TestConnectorLocal(t *testing.T) {
 //
 //	peer1 <-> sw1 <-> peer2
 func TestConnectorSingleSwitch(t *testing.T) {
+	peerPath := buildPeer(t)
+
 	n, err := gont.NewNetwork(t.Name())
 	if err != nil {
 		t.Fatalf("create network: %s", err)
@@ -230,26 +258,28 @@ func TestConnectorSingleSwitch(t *testing.T) {
 		t.Fatalf("Failed to ping peer1 -> peer2: %v", err)
 	}
 
-	peer1Cmd := peer1.Command("./peer",
-		cmdops.Envs([]string{
-			"LISTEN_ADDRESS=10.0.1.2:8000",
-			"PEER_PUBLIC_ADDRESS=10.0.1.3:8000",  // peer2 address
-			"PEER_PRIVATE_ADDRESS=10.0.1.3:8000", // peer2 address
-			"TLS_IPS=10.0.1.2,10.0.0.1",
-			"MODE=client",
-		}),
+	cfg1 := config.Config{
+		ListenAddress:      "10.0.1.2:8000",
+		PeerPublicAddress:  "10.0.1.3:8000", // peer2 address
+		PeerPrivateAddress: "10.0.1.3:8000", // peer2 address
+		Mode:               "client",
+		Cert:               newCertConfig(t, net.ParseIP("10.0.1.2"), net.ParseIP("10.0.0.1")),
+	}
+	peer1Cmd := peer1.Command(peerPath,
+		cmdops.Stdin(stdinConfig(t, cfg1)),
 		cmdops.Stderr(os.Stderr),
 		cmdops.Stdout(os.Stdout),
 	)
 
-	peer2Cmd := peer2.Command("./peer",
-		cmdops.Envs([]string{
-			"LISTEN_ADDRESS=:8000",
-			"PEER_PUBLIC_ADDRESS=10.0.1.2:8000",  // peer1 address
-			"PEER_PRIVATE_ADDRESS=10.0.1.2:8000", // peer1 address
-			"TLS_IPS=10.0.1.3,10.0.1.1",
-			"MODE=server",
-		}),
+	cfg2 := config.Config{
+		ListenAddress:      "10.0.1.3:8000",
+		PeerPublicAddress:  "10.0.1.2:8000", // peer1 address
+		PeerPrivateAddress: "10.0.1.2:8000", // peer1 address
+		Cert:               newCertConfig(t, net.ParseIP("10.0.1.3"), net.ParseIP("10.0.1.1")),
+		Mode:               "server",
+	}
+	peer2Cmd := peer2.Command(peerPath,
+		cmdops.Stdin(stdinConfig(t, cfg2)),
 		cmdops.Stderr(os.Stderr),
 		cmdops.Stdout(os.Stdout),
 	)
@@ -271,6 +301,8 @@ func TestConnectorSingleSwitch(t *testing.T) {
 //
 //	peer1 <-> sw1 <-> nat1 <-> sw2 <-> peer2
 func TestConnectorNAT(t *testing.T) {
+	peerPath := buildPeer(t)
+
 	n, err := gont.NewNetwork(t.Name())
 	if err != nil {
 		t.Fatalf("create network: %s", err)
@@ -321,26 +353,28 @@ func TestConnectorNAT(t *testing.T) {
 		t.Fatalf("Failed to ping peer1 -> peer2: %v", err)
 	}
 
-	peer1Cmd := peer1.Command("./peer",
-		cmdops.Envs([]string{
-			"LISTEN_ADDRESS=:8000",
-			"PEER_PUBLIC_ADDRESS=10.0.1.1:8000", // public address of peer2, as seen through NAT
-			"PEER_PRIVATE_ADDRESS=10.0.2.2:8000",
-			"TLS_IPS=10.0.1.2,10.0.2.1",
-			"MODE=client",
-		}),
+	cfg1 := config.Config{
+		ListenAddress:      ":8000",
+		PeerPublicAddress:  "10.0.1.1:8000", // public address of peer2, as seen through NAT
+		PeerPrivateAddress: "10.0.2.2:8000",
+		Mode:               "client",
+		Cert:               newCertConfig(t, net.ParseIP("10.0.1.2"), net.ParseIP("10.0.2.1")),
+	}
+	peer1Cmd := peer1.Command(peerPath,
+		cmdops.Stdin(stdinConfig(t, cfg1)),
 		cmdops.Stderr(os.Stderr),
 		cmdops.Stdout(os.Stdout),
 	)
 
-	peer2Cmd := peer2.Command("./peer",
-		cmdops.Envs([]string{
-			"LISTEN_ADDRESS=:8000",
-			"PEER_PUBLIC_ADDRESS=10.0.2.1:8000", // public address of peer1, as seen trough NAT
-			"PEER_PRIVATE_ADDRESS=10.0.1.2:8000",
-			"TLS_IPS=10.0.2.2,10.0.1.1",
-			"MODE=server",
-		}),
+	cfg2 := config.Config{
+		ListenAddress:      ":8000",
+		PeerPublicAddress:  "10.0.2.1:8000", // public address of peer1, as seen trough NAT
+		PeerPrivateAddress: "10.0.1.2:8000",
+		Mode:               "server",
+		Cert:               newCertConfig(t, net.ParseIP("10.0.2.2"), net.ParseIP("10.0.1.1")),
+	}
+	peer2Cmd := peer2.Command(peerPath,
+		cmdops.Stdin(stdinConfig(t, cfg2)),
 		cmdops.Stderr(os.Stderr),
 		cmdops.Stdout(os.Stdout),
 	)
@@ -356,4 +390,29 @@ func TestConnectorNAT(t *testing.T) {
 	if err := eg.Wait(); err != nil {
 		t.Errorf("failed: %v", err)
 	}
+}
+
+const peerPkg = "github.com/dmksnnk/star/internal/registar/control/controltest"
+
+func buildPeer(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "peer")
+
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", path, peerPkg)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to build peer: %s:\n %s", err, out)
+	}
+
+	return path
+}
+
+func stdinConfig[T any](t *testing.T, cfg T) io.Reader {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(&cfg); err != nil {
+		t.Fatalf("failed to encode config: %s", err)
+	}
+
+	return &buf
 }

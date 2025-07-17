@@ -4,35 +4,23 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
-	"fmt"
+	"encoding/gob"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"time"
 
-	"github.com/caarlos0/env/v11"
-	"github.com/dmksnnk/star/internal/cert"
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/registar/control"
+	"github.com/dmksnnk/star/internal/registar/control/controltest/config"
 	"github.com/quic-go/quic-go"
 )
 
-type config struct {
-	ListenAddress      string   `env:"LISTEN_ADDRESS"`
-	PeerPublicAddress  string   `env:"PEER_PUBLIC_ADDRESS"`
-	PeerPrivateAddress string   `env:"PEER_PRIVATE_ADDRESS"`
-	TLSIPs             []net.IP `env:"TLS_IPS"`
-	Mode               string   `env:"MODE"`
-}
-
 func main() {
-	var cfg config
-	if err := env.Parse(&cfg); err != nil {
-		slog.Error("parse config", "err", err)
+	var cfg config.Config
+	if err := gob.NewDecoder(os.Stdin).Decode(&cfg); err != nil {
+		slog.Error("decode config", "err", err)
 		os.Exit(1)
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -55,13 +43,7 @@ func main() {
 	}
 	defer transport.Close()
 
-	caTLSCert, err := caCert()
-	if err != nil {
-		slog.Error("create CA cert", "err", err)
-		os.Exit(1)
-	}
-
-	tlsConfig, err := newTLSConfig(caTLSCert, cfg.TLSIPs)
+	tlsConfig, err := cfg.Cert.TLSConfig()
 	if err != nil {
 		slog.Error("create TLS config", "err", err)
 		os.Exit(1)
@@ -133,57 +115,4 @@ func runServer(stream http3platform.Stream) {
 		os.Exit(1)
 	}
 	slog.Info("server: sent data")
-}
-
-func newTLSConfig(ca tls.Certificate, ips []net.IP) (*tls.Config, error) {
-	privkey, err := cert.NewPrivateKey()
-	if err != nil {
-		return nil, fmt.Errorf("new private key: %w", err)
-	}
-
-	peerCert, err := cert.NewIPCert(ca.Leaf, ca.PrivateKey, privkey.Public(), ips...)
-	if err != nil {
-		return nil, fmt.Errorf("create IP cert: %w", err)
-	}
-
-	pool := x509.NewCertPool()
-	pool.AddCert(ca.Leaf)
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{
-			{
-				Certificate: [][]byte{peerCert},
-				PrivateKey:  privkey,
-			},
-		},
-		RootCAs: pool,
-	}, nil
-}
-
-func caCert() (tls.Certificate, error) {
-	caCert, err := tls.LoadX509KeyPair("ca.crt", "ca-key.pem")
-	if err == nil {
-		return caCert, nil
-	}
-
-	ca, caPrivateKey, err := cert.NewCA()
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("new CA cert: %w", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
-	if err := os.WriteFile("ca.crt", certPEM, 0o666); err != nil {
-		return tls.Certificate{}, fmt.Errorf("write CA cert: %w", err)
-	}
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(caPrivateKey)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("marshal ca private key: %w", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-	if err := os.WriteFile("ca-key.pem", keyPEM, 0o666); err != nil {
-		return tls.Certificate{}, fmt.Errorf("write ca key: %w", err)
-	}
-
-	return tls.X509KeyPair(certPEM, keyPEM)
 }
