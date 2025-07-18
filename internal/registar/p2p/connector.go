@@ -1,4 +1,4 @@
-package control
+package p2p
 
 import (
 	"bufio"
@@ -20,14 +20,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var (
-	errConnectionRejected  = errors.New("connection rejected")
-	errMissingConnectionID = errors.New("missing connection ID")
-)
+var errConnectionRejected = errors.New("connection rejected")
 
 const (
 	errcodeCancelled quic.ApplicationErrorCode = iota + 1
-	errcodeMissingConnectionID
 )
 
 // Connector does NAT hole punching via HTTP/3 trying to directly connect two peers.

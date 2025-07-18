@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/platform/http3platform"
-	"github.com/dmksnnk/star/internal/registar/control"
-	"github.com/dmksnnk/star/internal/registar/control/controltest/config"
+	"github.com/dmksnnk/star/internal/registar/p2p"
+	"github.com/dmksnnk/star/internal/registar/p2p/p2ptest/config"
 	"github.com/quic-go/quic-go"
 )
 
@@ -49,7 +49,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	connector := control.NewConnector(transport, tlsConfig, control.WithLogger(logger))
+	connector := p2p.NewConnector(transport, tlsConfig, p2p.WithLogger(logger))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

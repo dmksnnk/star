@@ -1,4 +1,4 @@
-package control_test
+package p2p_test
 
 import (
 	"bytes"
@@ -20,8 +20,8 @@ import (
 
 	"github.com/dmksnnk/star/internal/cert"
 	"github.com/dmksnnk/star/internal/platform/http3platform"
-	"github.com/dmksnnk/star/internal/registar/control"
-	"github.com/dmksnnk/star/internal/registar/control/controltest/config"
+	"github.com/dmksnnk/star/internal/registar/p2p"
+	"github.com/dmksnnk/star/internal/registar/p2p/p2ptest/config"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 
@@ -71,7 +71,7 @@ func TestConnectorLocal(t *testing.T) {
 	runConnTest(t, stream1, stream2)
 }
 
-func newPeer(t *testing.T, name string) (*control.Connector, net.PacketConn) {
+func newPeer(t *testing.T, name string) (*p2p.Connector, net.PacketConn) {
 	addr := &net.UDPAddr{
 		IP:   net.IPv4(127, 0, 0, 1),
 		Port: 0,
@@ -119,7 +119,7 @@ func newPeer(t *testing.T, name string) (*control.Connector, net.PacketConn) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	logger = logger.With("connector", name)
-	connector := control.NewConnector(transport, tlsConfig, control.WithLogger(logger))
+	connector := p2p.NewConnector(transport, tlsConfig, p2p.WithLogger(logger))
 	return connector, conn
 }
 
