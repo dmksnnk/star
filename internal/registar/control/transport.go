@@ -2,30 +2,24 @@ package control
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
-	"time"
 )
 
 // transport is simple transport on a top of a single connection.
 type transport struct {
-	mux  sync.Mutex
-	conn Conn
-	br   *bufio.Reader
+	mux    sync.Mutex
+	writer io.Writer
+	br     *bufio.Reader
 }
 
-// Conn is a minimal interface of a [net.Conn] that is used by the transport.
-type Conn interface {
-	io.ReadWriteCloser
-	SetDeadline(time.Time) error
-}
-
-func newTransport(conn Conn) *transport {
+func newTransport(conn io.ReadWriter) *transport {
 	return &transport{
-		conn: conn,
-		br:   bufio.NewReader(conn),
+		writer: conn,
+		br:     bufio.NewReader(conn),
 	}
 }
 
@@ -34,41 +28,78 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.mux.Lock() // allow only one request/response at a time
 	defer t.mux.Unlock()
 
-	ctx := req.Context()
-	if dl, ok := ctx.Deadline(); ok {
-		if err := t.conn.SetDeadline(dl); err != nil {
-			return nil, fmt.Errorf("set deadline: %w", err)
-		}
-		defer func() {
-			_ = t.conn.SetDeadline(time.Time{})
-		}()
-	}
-
-	if err := req.Write(t.conn); err != nil {
+	if err := req.Write(t.writer); err != nil {
 		return nil, err
 	}
 
 	return http.ReadResponse(t.br, req)
 }
 
-// Handle handles a single HTTP request.
-func (t *transport) Handle(handler func(*http.Request) *http.Response) error {
-	req, err := http.ReadRequest(t.br)
-	if err != nil {
-		return err
-	}
-
-	resp := handler(req)
-	if resp == nil {
-		resp = &http.Response{
-			StatusCode: http.StatusOK,
-		}
-	}
-
-	return resp.Write(t.conn)
+type server struct {
+	handler http.Handler
 }
 
-// Close closes the transport.
-func (t *transport) Close() error {
-	return t.conn.Close()
+func newServer(handler http.Handler) *server {
+	return &server{
+		handler: handler,
+	}
+}
+
+// Handle handles a single HTTP request.
+func (s *server) Serve(conn io.ReadWriter) error {
+	br := bufio.NewReader(conn)
+	for {
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return err
+		}
+
+		var rw responseWriter
+		s.handler.ServeHTTP(&rw, req)
+		req.Body.Close()
+
+		if err := rw.write(conn); err != nil {
+			return fmt.Errorf("write response: %w", err)
+		}
+	}
+}
+
+type responseWriter struct {
+	status int
+	header http.Header
+	body   bytes.Buffer
+}
+
+// Header returns the header map that will be sent in response.
+func (rw *responseWriter) Header() http.Header {
+	if rw.header == nil {
+		rw.header = make(http.Header)
+	}
+	return rw.header
+}
+
+// Write writes the data to the connection as part of an HTTP reply.
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	return rw.body.Write(b)
+}
+
+// WriteHeader sets an HTTP response header.
+func (rw *responseWriter) WriteHeader(statusCode int) {
+	rw.status = statusCode
+}
+
+func (rw *responseWriter) write(w io.Writer) error {
+	resp := &http.Response{
+		StatusCode: rw.status,
+		Body:       io.NopCloser(&rw.body),
+		Header:     rw.header,
+	}
+	if resp.StatusCode == 0 {
+		resp.StatusCode = http.StatusOK
+	}
+	if resp.Header == nil {
+		resp.Header = make(http.Header)
+	}
+
+	return resp.Write(w)
 }
