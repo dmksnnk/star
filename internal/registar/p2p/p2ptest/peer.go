@@ -26,13 +26,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", cfg.ListenAddress)
-	if err != nil {
-		slog.Error("resolve udp listen address", "err", err)
-		os.Exit(1)
-	}
-
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(cfg.ListenAddress))
 	if err != nil {
 		slog.Error("listen UDP", "err", err)
 		os.Exit(1)

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +47,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+var localhost = [4]byte{127, 0, 0, 1}
+
+func localhostAddPort(port uint16) netip.AddrPort {
+	return netip.AddrPortFrom(netip.AddrFrom4(localhost), 8001)
+}
+
 func TestConnectorLocal(t *testing.T) {
 	peer1, conn1 := newPeer(t, "peer1")
 	peer2, conn2 := newPeer(t, "peer2")
@@ -56,11 +63,13 @@ func TestConnectorLocal(t *testing.T) {
 	var stream1, stream2 http3platform.Stream
 	var eg errgroup.Group
 	eg.Go(func() (err error) {
-		stream1, err = peer1.Connect(ctx, conn2.LocalAddr().String(), "127.0.0.1:8001")
+		addr := conn2.LocalAddr().(*net.UDPAddr).AddrPort()
+		stream1, err = peer1.Connect(ctx, addr, localhostAddPort(8001))
 		return
 	})
 	eg.Go(func() (err error) {
-		stream2, err = peer2.Connect(ctx, conn1.LocalAddr().String(), "127.0.0.1:8002")
+		addr := conn1.LocalAddr().(*net.UDPAddr).AddrPort()
+		stream2, err = peer2.Connect(ctx, addr, localhostAddPort(8002))
 		return
 	})
 
@@ -180,9 +189,9 @@ func TestConnectorLocalhost(t *testing.T) {
 	peerBin := buildPeer(t)
 
 	cfg1 := config.Config{
-		ListenAddress:      "127.0.0.1:8001",
-		PeerPublicAddress:  "127.0.0.1:8002", // peer2 address
-		PeerPrivateAddress: "127.0.0.1:8002",
+		ListenAddress:      localhostAddPort(8001),
+		PeerPublicAddress:  localhostAddPort(8002), // peer2 address
+		PeerPrivateAddress: localhostAddPort(8002),
 		Mode:               "client",
 		Cert:               newCertConfig(t, net.ParseIP("127.0.0.1")),
 	}
@@ -192,9 +201,9 @@ func TestConnectorLocalhost(t *testing.T) {
 	peer1Cmd.Stdin = stdinConfig(t, cfg1)
 
 	cfg2 := config.Config{
-		ListenAddress:      "127.0.0.1:8002", // public address
-		PeerPublicAddress:  "127.0.0.1:8001", // peer1 address
-		PeerPrivateAddress: "127.0.0.1:8001",
+		ListenAddress:      localhostAddPort(8002), // public address
+		PeerPublicAddress:  localhostAddPort(8001), // peer1 address
+		PeerPrivateAddress: localhostAddPort(8001),
 		Mode:               "server",
 		Cert:               newCertConfig(t, net.ParseIP("127.0.0.1")),
 	}
@@ -259,9 +268,9 @@ func TestConnectorSingleSwitch(t *testing.T) {
 	}
 
 	cfg1 := config.Config{
-		ListenAddress:      "10.0.1.2:8000",
-		PeerPublicAddress:  "10.0.1.3:8000", // peer2 address
-		PeerPrivateAddress: "10.0.1.3:8000", // peer2 address
+		ListenAddress:      netip.MustParseAddrPort("10.0.1.2:8000"),
+		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.3:8000"), // peer2 address
+		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.3:8000"), // peer2 address
 		Mode:               "client",
 		Cert:               newCertConfig(t, net.ParseIP("10.0.1.2"), net.ParseIP("10.0.0.1")),
 	}
@@ -272,9 +281,9 @@ func TestConnectorSingleSwitch(t *testing.T) {
 	)
 
 	cfg2 := config.Config{
-		ListenAddress:      "10.0.1.3:8000",
-		PeerPublicAddress:  "10.0.1.2:8000", // peer1 address
-		PeerPrivateAddress: "10.0.1.2:8000", // peer1 address
+		ListenAddress:      netip.MustParseAddrPort("10.0.1.3:8000"),
+		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.2:8000"), // peer1 address
+		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.2:8000"), // peer1 address
 		Cert:               newCertConfig(t, net.ParseIP("10.0.1.3"), net.ParseIP("10.0.1.1")),
 		Mode:               "server",
 	}
@@ -354,9 +363,9 @@ func TestConnectorNAT(t *testing.T) {
 	}
 
 	cfg1 := config.Config{
-		ListenAddress:      ":8000",
-		PeerPublicAddress:  "10.0.1.1:8000", // public address of peer2, as seen through NAT
-		PeerPrivateAddress: "10.0.2.2:8000",
+		ListenAddress:      netip.AddrPortFrom(netip.IPv4Unspecified(), 8000),
+		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.1:8000"), // public address of peer2, as seen through NAT
+		PeerPrivateAddress: netip.MustParseAddrPort("10.0.2.2:8000"),
 		Mode:               "client",
 		Cert:               newCertConfig(t, net.ParseIP("10.0.1.2"), net.ParseIP("10.0.2.1")),
 	}
@@ -367,9 +376,9 @@ func TestConnectorNAT(t *testing.T) {
 	)
 
 	cfg2 := config.Config{
-		ListenAddress:      ":8000",
-		PeerPublicAddress:  "10.0.2.1:8000", // public address of peer1, as seen trough NAT
-		PeerPrivateAddress: "10.0.1.2:8000",
+		ListenAddress:      netip.AddrPortFrom(netip.IPv4Unspecified(), 8000),
+		PeerPublicAddress:  netip.MustParseAddrPort("10.0.2.1:8000"), // public address of peer1, as seen trough NAT
+		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.2:8000"),
 		Mode:               "server",
 		Cert:               newCertConfig(t, net.ParseIP("10.0.2.2"), net.ParseIP("10.0.1.1")),
 	}
@@ -392,7 +401,7 @@ func TestConnectorNAT(t *testing.T) {
 	}
 }
 
-const peerPkg = "github.com/dmksnnk/star/internal/registar/control/controltest"
+const peerPkg = "github.com/dmksnnk/star/internal/registar/p2p/p2ptest"
 
 func buildPeer(t *testing.T) string {
 	t.Helper()

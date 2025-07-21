@@ -4,13 +4,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net/netip"
 )
 
 // Config defines the configuration for the peer test program.
 type Config struct {
-	ListenAddress      string
-	PeerPublicAddress  string
-	PeerPrivateAddress string
+	ListenAddress      netip.AddrPort
+	PeerPublicAddress  netip.AddrPort
+	PeerPrivateAddress netip.AddrPort
 	Cert               Cert
 	Mode               string
 }

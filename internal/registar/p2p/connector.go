@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/dmksnnk/star/internal/platform/http3platform"
@@ -56,7 +57,7 @@ func NewConnector(transport *quic.Transport, tlsConf *tls.Config, opts ...Option
 	return c
 }
 
-func (c *Connector) Connect(ctx context.Context, public, private string) (http3platform.Stream, error) {
+func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort) (http3platform.Stream, error) {
 	earlyListener, err := c.transport.ListenEarly(c.tlsConf, c.quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("listen early: %w", err)
@@ -98,7 +99,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 			}
 
 			select {
-			case accepted <- &Stream{conn, stream}:
+			case accepted <- newStream(conn, stream):
 				c.logger.Debug("accepted connection",
 					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
@@ -153,7 +154,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 			}
 
 			select {
-			case publicDialled <- &Stream{conn, stream}:
+			case publicDialled <- newStream(conn, stream):
 				c.logger.Debug("established connection to public adddress",
 					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
@@ -209,7 +210,7 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 				}
 
 				select {
-				case privateDialled <- &Stream{conn, stream}:
+				case privateDialled <- newStream(conn, stream):
 					c.logger.Debug("established connetion to private address", "remote_addr", conn.RemoteAddr().String())
 					return nil
 				case <-privateReqCtx.Done():
@@ -244,13 +245,8 @@ func (c *Connector) Connect(ctx context.Context, public, private string) (http3p
 	}
 }
 
-func (c *Connector) dial(ctx context.Context, addr string) (*quic.Conn, error) {
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("resolve UDP address: %w", err)
-	}
-
-	conn, err := c.transport.Dial(ctx, udpAddr, c.tlsConf, c.quicConf)
+func (c *Connector) dial(ctx context.Context, addr netip.AddrPort) (*quic.Conn, error) {
+	conn, err := c.transport.Dial(ctx, net.UDPAddrFromAddrPort(addr), c.tlsConf, c.quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("dial QUIC: %w", err)
 	}
@@ -348,17 +344,6 @@ func httpWrite(w io.Writer, body io.ReadCloser, status int) {
 	}
 
 	r.Write(w)
-}
-
-var _ http3platform.Stream = &Stream{}
-
-type Stream struct {
-	*quic.Conn
-	*quic.Stream
-}
-
-func (s *Stream) Context() context.Context {
-	return s.Stream.Context()
 }
 
 // Option is a functional option for configuring a Connector.
