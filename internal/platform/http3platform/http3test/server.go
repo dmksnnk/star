@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -26,6 +27,8 @@ type Server struct {
 // It has a self-signed CA and a server certificate.
 // It closes itself on test cleanup.
 func NewTestServer(t *testing.T, handler http.Handler) *Server {
+	t.Helper()
+
 	ca, caPrivateKey, err := cert.NewCA()
 	if err != nil {
 		t.Fatal("create CA:", err)
@@ -35,7 +38,7 @@ func NewTestServer(t *testing.T, handler http.Handler) *Server {
 	if err != nil {
 		t.Fatal("create server private key:", err)
 	}
-	srvCert, err := cert.NewIPCert(ca, caPrivateKey, net.IPv4(127, 0, 0, 1), srvPrivkey.Public())
+	srvCert, err := cert.NewIPCert(ca, caPrivateKey, srvPrivkey.Public(), net.IPv4(127, 0, 0, 1))
 	if err != nil {
 		t.Fatal("create server cert:", err)
 	}
@@ -90,14 +93,25 @@ func NewTestServer(t *testing.T, handler http.Handler) *Server {
 	}
 }
 
-// Dialer returns a new HTTP/3 dialer configure to with the server's CA.
-func (s *Server) Dialer() *http3platform.HTTP3Dialer {
+func (s *Server) TLSConfig() *tls.Config {
 	root := x509.NewCertPool()
 	root.AddCert(s.ca)
-	clientTLSConf := &tls.Config{
+	return &tls.Config{
 		RootCAs:    root,
 		NextProtos: []string{http3.NextProtoH3},
 	}
+}
+
+func (s *Server) URL() *url.URL {
+	return &url.URL{
+		Scheme: "https",
+		Host:   s.conn.LocalAddr().String(),
+	}
+}
+
+// Dialer returns a new HTTP/3 dialer configure to with the server's CA.
+func (s *Server) Dialer() *http3platform.HTTP3Dialer {
+	clientTLSConf := s.TLSConfig()
 
 	return &http3platform.HTTP3Dialer{
 		TLSConfig: clientTLSConf,
@@ -114,6 +128,8 @@ func (s *Server) Addr() net.Addr {
 }
 
 func newLocalUDPConn(t *testing.T) net.PacketConn {
+	t.Helper()
+
 	conn, err := net.ListenPacket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal("listen UDP:", err)

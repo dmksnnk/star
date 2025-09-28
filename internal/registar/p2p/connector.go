@@ -15,9 +15,9 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -57,7 +57,7 @@ func NewConnector(transport *quic.Transport, tlsConf *tls.Config, opts ...Option
 	return c
 }
 
-func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort) (http3platform.Stream, error) {
+func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort) (*quic.Conn, error) {
 	earlyListener, err := c.transport.ListenEarly(c.tlsConf, c.quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("listen early: %w", err)
@@ -66,7 +66,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 
 	eg, ctx := errgroup.WithContext(ctx)
 
-	accepted := make(chan *Stream)
+	accepted := make(chan *quic.Conn)
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
 	defer acceptCancel()
 	eg.Go(func() error {
@@ -89,17 +89,16 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 				continue
 			}
 
-			stream, err := c.handleRequest(ctx, conn)
-			if err != nil {
+			if err := c.handleRequest(ctx, conn); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
 				}
 
-				return nil
+				return err
 			}
 
 			select {
-			case accepted <- newStream(conn, stream):
+			case accepted <- conn:
 				c.logger.Debug("accepted connection",
 					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
@@ -110,7 +109,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 		}
 	})
 
-	publicDialled := make(chan *Stream)
+	publicDialled := make(chan *quic.Conn)
 	publicReqCtx, publicReqCancel := context.WithCancel(ctx)
 	defer publicReqCancel()
 	eg.Go(func() error {
@@ -134,8 +133,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 				continue
 			}
 
-			stream, err := c.sendRequest(publicReqCtx, conn)
-			if err != nil {
+			if err := c.sendRequest(publicReqCtx, conn); err != nil {
 				// if isHandshakeTimeoutError(err) {
 				// 	continue
 				// }
@@ -154,7 +152,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			}
 
 			select {
-			case publicDialled <- newStream(conn, stream):
+			case publicDialled <- conn:
 				c.logger.Debug("established connection to public adddress",
 					"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
 				return nil
@@ -165,11 +163,11 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 		}
 	})
 
-	var privateDialled chan *Stream // created as nil, so select ignores it
+	var privateDialled chan *quic.Conn // created as nil, so select ignores it
 	privateReqCtx, privateReqCancel := context.WithCancel(ctx)
 	defer privateReqCancel()
 	if public != private { // TODO: refactor
-		privateDialled = make(chan *Stream)
+		privateDialled = make(chan *quic.Conn)
 		eg.Go(func() error {
 			for {
 				conn, err := c.dial(privateReqCtx, private)
@@ -191,8 +189,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 					continue
 				}
 
-				stream, err := c.sendRequest(privateReqCtx, conn)
-				if err != nil {
+				if err := c.sendRequest(privateReqCtx, conn); err != nil {
 					// if isHandshakeTimeoutError(err) {
 					// continue
 					// }
@@ -210,7 +207,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 				}
 
 				select {
-				case privateDialled <- newStream(conn, stream):
+				case privateDialled <- conn:
 					c.logger.Debug("established connetion to private address", "remote_addr", conn.RemoteAddr().String())
 					return nil
 				case <-privateReqCtx.Done():
@@ -222,21 +219,21 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	}
 
 	select {
-	case stream := <-accepted:
+	case conn := <-accepted:
 		publicReqCancel()
 		privateReqCancel()
 		c.logger.Info("connection established via server")
-		return stream, eg.Wait()
-	case stream := <-publicDialled:
+		return conn, eg.Wait()
+	case conn := <-publicDialled:
 		acceptCancel()
 		privateReqCancel()
 		c.logger.Info("connection established via public dial")
-		return stream, eg.Wait()
-	case stream := <-privateDialled:
+		return conn, eg.Wait()
+	case conn := <-privateDialled:
 		acceptCancel()
 		publicReqCancel()
 		c.logger.Info("connection established via private dial")
-		return stream, eg.Wait()
+		return conn, eg.Wait()
 	case <-ctx.Done():
 		acceptCancel()
 		publicReqCancel()
@@ -254,36 +251,40 @@ func (c *Connector) dial(ctx context.Context, addr netip.AddrPort) (*quic.Conn, 
 	return conn, nil
 }
 
-func (c *Connector) sendRequest(ctx context.Context, conn *quic.Conn) (*quic.Stream, error) {
+func (c *Connector) sendRequest(ctx context.Context, conn *quic.Conn) error {
 	req, err := c.newRequest(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("open stream: %w", err)
+		return fmt.Errorf("open stream: %w", err)
 	}
+	defer func() {
+		stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeNoError))
+		stream.Close()
+	}()
 
 	if err := req.Write(stream); err != nil {
-		return nil, fmt.Errorf("write request: %w", err)
+		return fmt.Errorf("write request: %w", err)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(stream), req)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return fmt.Errorf("read response: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusConflict {
-			return nil, errConnectionRejected
+			return errConnectionRejected
 		}
 
-		return nil, httpplatform.NewBadStatusCodeError(resp.StatusCode, resp.Body)
+		return httpplatform.NewBadStatusCodeError(resp.StatusCode, resp.Body)
 	}
 
-	return stream, nil
+	return nil
 }
 
 func (c *Connector) newRequest(ctx context.Context) (*http.Request, error) {
@@ -295,36 +296,41 @@ func (c *Connector) newRequest(ctx context.Context) (*http.Request, error) {
 	return req, nil
 }
 
-func (c *Connector) handleRequest(ctx context.Context, conn *quic.Conn) (*quic.Stream, error) {
+func (c *Connector) handleRequest(ctx context.Context, conn *quic.Conn) error {
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("accept stream: %w", err)
+			return fmt.Errorf("accept stream: %w", err)
 		}
 
 		req, err := http.ReadRequest(bufio.NewReader(stream))
 		if err != nil {
-			return nil, fmt.Errorf("read request: %w", err)
+			return fmt.Errorf("read request: %w", err)
 		}
 
 		peerID := req.Header.Get("X-Connector-ID")
 		if peerID == "" {
 			httpError(stream, "missing X-Connector-ID", http.StatusBadRequest)
-			stream.CancelRead(0)
+			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeNoError))
+			stream.Close()
 			continue
 		}
 
 		if peerID > c.id {
 			c.logger.Debug("tie-breaking: peer has larger ID, rejecting connection", "our_id", c.id, "peer_id", peerID)
 			httpError(stream, "rejected by tie-breaker", http.StatusConflict)
-			stream.CancelRead(0)
+			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeNoError))
+			stream.Close()
 			continue
 		}
 		c.logger.Debug("tie-breaking: we have larger or equal ID, accepting connection", "peer_id", peerID)
 
 		httpWrite(stream, http.NoBody, http.StatusOK)
 
-		return stream, nil
+		stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeNoError))
+		stream.Close()
+
+		return nil
 	}
 }
 

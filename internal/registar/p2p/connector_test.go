@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/cert"
-	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/registar/p2p"
 	"github.com/dmksnnk/star/internal/registar/p2p/p2ptest/config"
 	"github.com/quic-go/quic-go"
@@ -47,10 +46,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-var localhost = [4]byte{127, 0, 0, 1}
+var localhost = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 
 func localhostAddPort(port uint16) netip.AddrPort {
-	return netip.AddrPortFrom(netip.AddrFrom4(localhost), 8001)
+	return netip.AddrPortFrom(localhost, 8001)
 }
 
 func TestConnectorLocal(t *testing.T) {
@@ -60,7 +59,7 @@ func TestConnectorLocal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var stream1, stream2 http3platform.Stream
+	var stream1, stream2 *quic.Conn
 	var eg errgroup.Group
 	eg.Go(func() (err error) {
 		addr := conn2.LocalAddr().(*net.UDPAddr).AddrPort()

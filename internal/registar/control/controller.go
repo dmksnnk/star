@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 )
@@ -17,23 +18,32 @@ type Controller struct {
 	tr *transport
 }
 
-// NewRegistar creates a new connector on a connection.
-func NewRegistar(conn io.ReadWriter) *Controller {
+// NewController creates a new controller on a connection to the agent.
+func NewController(conn io.ReadWriter) *Controller {
 	return &Controller{
 		tr: newTransport(conn),
 	}
 }
 
-// DoRequestForward asks the [Agent] (follower) to initiate a forward request to the server.
-func (c *Controller) DoRequestForward(ctx context.Context, peerID string) error {
+// InitRelayStream asks the [Agent] (follower) to initiate a forward request to the relay.
+func (c *Controller) InitRelayStream(ctx context.Context, peerID string) error {
 	cmd := RequestForwardCommand{
 		PeerID: peerID,
 	}
-	return c.do(ctx, http.MethodPost, "/forward", cmd)
+	return c.do(ctx, http.MethodPost, "/relay-peer", cmd)
+}
+
+// JoinViaRelay asks the [Agent] (follower) to join a session via relay.
+func (c *Controller) JoinViaRelay(ctx context.Context, peerID string) error {
+	cmd := RequestJoin{
+		PeerID: peerID,
+	}
+	return c.do(ctx, http.MethodPost, "/join-relay", cmd)
 }
 
 // ConnectTo asks the peer to do hole-punching, by trying to establish
-func (c *Controller) ConnectTo(ctx context.Context, public, private string) error {
+// connection to public or private addresses.
+func (c *Controller) ConnectTo(ctx context.Context, public, private netip.AddrPort) error {
 	cmd := ConnectCommand{
 		PublicAddress:  public,
 		PrivateAddress: private,
@@ -52,14 +62,14 @@ func (c *Controller) ConnectTo(ctx context.Context, public, private string) erro
 }
 
 func (c *Controller) do(ctx context.Context, method, url string, body any) error {
-	var reqBody io.ReadCloser = http.NoBody
+	var reqBody io.Reader = http.NoBody
 	if body != nil {
 		var buf bytes.Buffer
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
 			return fmt.Errorf("encode body: %w", err)
 		}
 
-		reqBody = io.NopCloser(&buf)
+		reqBody = &buf
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
@@ -82,12 +92,16 @@ func (c *Controller) do(ctx context.Context, method, url string, body any) error
 
 // ConnectCommand is a command to connect to another peer.
 type ConnectCommand struct {
-	PublicAddress  string `json:"public_address"`
-	PrivateAddress string `json:"private_address"`
+	PublicAddress  netip.AddrPort `json:"public_address"`
+	PrivateAddress netip.AddrPort `json:"private_address"`
 }
 
 // RequestForwardCommand is a command to ask Registar to forward peer connection to you.
 type RequestForwardCommand struct {
+	PeerID string `json:"peer_id"`
+}
+
+type RequestJoin struct {
 	PeerID string `json:"peer_id"`
 }
 

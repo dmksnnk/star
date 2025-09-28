@@ -25,8 +25,8 @@ func newTransport(conn io.ReadWriter) *transport {
 
 // RoundTrip implements http.RoundTripper interface.
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.mux.Lock() // allow only one request/response at a time
-	defer t.mux.Unlock()
+	t.mux.Lock()         // allow only one request/response at a time
+	defer t.mux.Unlock() // FIXME: do we need this?
 
 	if err := req.Write(t.writer); err != nil {
 		return nil, err
@@ -45,7 +45,9 @@ func newServer(handler http.Handler) *server {
 	}
 }
 
-// Handle handles a single HTTP request.
+// Serve serves HTTP requests over single connection.
+// One each request appropriate handler will be called.
+// To stop the server, connection should be closed.
 func (s *server) Serve(conn io.ReadWriter) error {
 	br := bufio.NewReader(conn)
 	for {

@@ -89,6 +89,12 @@ func TokenFromPathValue(name string) func(*http.Request) string {
 	}
 }
 
+func TokenFromHeader(name string) func(*http.Request) string {
+	return func(r *http.Request) string {
+		return r.Header.Get(name)
+	}
+}
+
 func headers(hs http.Header) []any {
 	attrs := make([]any, 0, len(hs))
 	for k, vs := range hs {

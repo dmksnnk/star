@@ -8,7 +8,7 @@ import (
 
 const StatusCodeConnectFailed = http.StatusPreconditionFailed
 
-// Agent listens for incoming requests from [Controller]
+// Agent listens for incoming requests from [Controller].
 type Agent struct {
 	mux *http.ServeMux
 }
@@ -57,6 +57,7 @@ func (a *Agent) OnConnectTo(f func(ConnectCommand) (bool, error)) {
 }
 
 // Serve serves the connection.
+// To stop the Agent, connection should be closed.
 func (a *Agent) Serve(conn io.ReadWriter) error {
 	srv := newServer(a.mux)
 	return srv.Serve(conn)
