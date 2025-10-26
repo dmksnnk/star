@@ -23,6 +23,7 @@ import (
 	"github.com/dmksnnk/star/internal/registar/p2p"
 	"github.com/dmksnnk/star/internal/registar/p2p/p2ptest/config"
 	"github.com/quic-go/quic-go"
+	"go.uber.org/goleak"
 	"golang.org/x/sync/errgroup"
 
 	gont "cunicu.li/gont/v2/pkg"
@@ -43,37 +44,83 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	exitCode := m.Run()
+	if exitCode == 0 {
+		if err := goleak.Find(); err != nil {
+			fmt.Fprintf(os.Stderr, "goleak: %s", err)
+			exitCode = 1
+		}
+	}
+
+	os.Exit(exitCode)
 }
 
 var localhost = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 
 func localhostAddPort(port uint16) netip.AddrPort {
-	return netip.AddrPortFrom(localhost, 8001)
+	return netip.AddrPortFrom(localhost, port)
 }
 
 func TestConnectorLocal(t *testing.T) {
-	peer1, conn1 := newPeer(t, "peer1")
-	peer2, conn2 := newPeer(t, "peer2")
+	peer1, packetConn1 := newPeer(t, "peer1")
+	peer2, packetConn2 := newPeer(t, "peer2")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var stream1, stream2 *quic.Conn
+	var quicConn1, quicConn2 *quic.Conn
 	var eg errgroup.Group
 	eg.Go(func() (err error) {
-		addr := conn2.LocalAddr().(*net.UDPAddr).AddrPort()
-		stream1, err = peer1.Connect(ctx, addr, localhostAddPort(8001))
+		addr := packetConn2.LocalAddr().(*net.UDPAddr).AddrPort()
+		quicConn1, err = peer1.Connect(ctx, addr, localhostAddPort(8001))
+
 		return
 	})
 	eg.Go(func() (err error) {
-		addr := conn1.LocalAddr().(*net.UDPAddr).AddrPort()
-		stream2, err = peer2.Connect(ctx, addr, localhostAddPort(8002))
+		addr := packetConn1.LocalAddr().(*net.UDPAddr).AddrPort()
+		quicConn2, err = peer2.Connect(ctx, addr, localhostAddPort(8002))
+
 		return
 	})
 
 	if err := eg.Wait(); err != nil {
-		t.Fatalf("wait: %s", err)
+		t.Fatalf("establish connection: %s", err)
+	}
+
+	// stream is accpected with first data read, so we need to send data from one side
+	var stream1, stream2 *quic.Stream
+	eg = errgroup.Group{}
+	eg.Go(func() (err error) {
+		stream1, err = quicConn1.AcceptStream(ctx)
+		if err != nil {
+			return
+		}
+
+		buf := make([]byte, 5)
+		_, err = stream1.Read(buf)
+		if err != nil {
+			return
+		}
+		if !bytes.Equal(buf, []byte("hello")) {
+			err = fmt.Errorf("unexpected data: %q", buf)
+			return
+		}
+
+		return
+	})
+
+	eg.Go(func() (err error) {
+		stream2, err = quicConn2.OpenStreamSync(ctx)
+		if err != nil {
+			return
+		}
+
+		stream2.Write([]byte("hello"))
+
+		return
+	})
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("open/accept stream: %s", err)
 	}
 
 	runConnTest(t, stream1, stream2)
