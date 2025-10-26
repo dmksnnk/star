@@ -5,10 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
-	"net"
 	"net/http"
-	"net/netip"
 	"sync"
 	"time"
 
@@ -25,9 +22,6 @@ const (
 
 // API is a HTTP API for registar service.
 type API struct {
-	registeredAddrs *KVStore[quic.ConnectionTracingID, Waiter[AddrPair]]
-	registeredWg    sync.WaitGroup
-
 	registar    Registar
 	caAuthority *Authority
 }
@@ -40,41 +34,28 @@ type Registar interface {
 // New creates a new API on top of the given service.
 func NewAPI(r Registar, caAuthority *Authority) *API {
 	return &API{
-		registeredAddrs: NewKVStore[quic.ConnectionTracingID, Waiter[AddrPair]](),
-
 		registar:    r,
 		caAuthority: caAuthority,
 	}
 }
 
-// TODO: create client, write tests
-
-func (a *API) Register(w http.ResponseWriter, r *http.Request) {
-	if !a.validateHTTP3Settings(w) {
-		return
-	}
-
-	var req RegisterRequest
+func (a *API) SessionCert(w http.ResponseWriter, r *http.Request) {
+	var req CertRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	addrs := AddrPair{
-		Public:  remoteAddr(w, r),
-		Private: req.PrivateAddr,
-	}
-
 	key, _ := auth.KeyFromContext(r.Context())
 
 	// TODO: move to Registar, remove session CA on session end
-	caCert, cert, err := a.caAuthority.NewSessionCert(key, addrs, (*x509.CertificateRequest)(req.CSR))
+	caCert, cert, err := a.caAuthority.NewSessionCert(key, (*x509.CertificateRequest)(req.CSR))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	resp := RegisterResponse{
+	resp := CertResponse{
 		CACert: (*Certificate)(caCert),
 		Cert:   (*Certificate)(cert),
 	}
@@ -83,82 +64,52 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// TODO: move to Registar, to make API stateless
-	conn := w.(http3.Hijacker).Connection()
-	connTracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-	fmt.Println("api: waiting for", connTracingID, "to host/join")
-
-	addrsWaiter := newWaiter(addrs)
-	a.registeredAddrs.Set(connTracingID, addrsWaiter)
-
-	a.registeredWg.Add(1)
-	go func() {
-		defer a.registeredWg.Done()
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-
-		// either done or timeout, delete from map in both cases
-		_ = addrsWaiter.Wait(ctx)
-		fmt.Printf("api: done waiting for %d to host/join\n", connTracingID)
-
-		a.registeredAddrs.Delete(connTracingID)
-	}()
 }
 
 func (a *API) Host(w http.ResponseWriter, r *http.Request) {
-	conn := w.(http3.Hijacker).Connection()
-	connTracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-
-	addrsWaiter, ok := a.registeredAddrs.Get(connTracingID)
-	if !ok {
-		http.Error(w, "no waiting host", http.StatusBadRequest)
-		return
-	}
-
-	key, _ := auth.KeyFromContext(r.Context())
-
-	streamer := w.(http3.HTTPStreamer)
-	if err := a.registar.Host(r.Context(), key, streamer, addrsWaiter.V); err != nil {
+	var req RegisterRequest
+	if err := req.UnmarshalHTTP(r); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	addrsWaiter.Done() // done only after successful registration
-}
-
-func (a *API) Join(w http.ResponseWriter, r *http.Request) {
-	conn := w.(http3.Hijacker).Connection()
-	connTracingID := conn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-
-	addrsWaiter, ok := a.registeredAddrs.Get(connTracingID)
-	if !ok {
-		http.Error(w, "no waiting peer", http.StatusBadRequest)
-		return
+	addrs := AddrPair{
+		Public:  req.PublicAddr,
+		Private: req.PrivateAddr,
 	}
 
 	key, _ := auth.KeyFromContext(r.Context())
 
 	streamer := w.(http3.HTTPStreamer)
-	if err := a.registar.Join(r.Context(), key, streamer, addrsWaiter.V); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := a.registar.Host(r.Context(), key, streamer, addrs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+}
+
+func (a *API) Join(w http.ResponseWriter, r *http.Request) {
+	var req RegisterRequest
+	if err := req.UnmarshalHTTP(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	addrsWaiter.Done() // done only after successful joining, so client can retry on error
+	addrs := AddrPair{
+		Public:  req.PublicAddr,
+		Private: req.PrivateAddr,
+	}
+
+	key, _ := auth.KeyFromContext(r.Context())
+
+	streamer := w.(http3.HTTPStreamer)
+	if err := a.registar.Join(r.Context(), key, streamer, addrs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (a *API) Close() error {
-	a.registeredWg.Wait()
 	return nil
-}
-
-func remoteAddr(w http.ResponseWriter, r *http.Request) netip.AddrPort {
-	// FIXME: can public add be from proxy?
-	conn := w.(http3.Hijacker).Connection()
-
-	return conn.RemoteAddr().(*net.UDPAddr).AddrPort()
 }
 
 // // Forward forwards a peer's conn to the game host conn.
@@ -225,9 +176,9 @@ func NewServer(addr string, handler http.Handler, tlsConf *tls.Config) *http3.Se
 func NewRouter(api *API, secret []byte) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(
-		"POST /register",
+		"POST /session-cert",
 		httpplatform.Wrap(
-			http.HandlerFunc(api.Register),
+			http.HandlerFunc(api.SessionCert),
 			httpplatform.Authenticate(secret, httpplatform.TokenFromHeader(headerToken)),
 		),
 	)

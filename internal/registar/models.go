@@ -5,15 +5,15 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/http"
 	"net/netip"
 )
 
-type RegisterRequest struct {
-	PrivateAddr netip.AddrPort `json:"private_address"`
-	CSR         *CSR           `json:"csr"`
+type CertRequest struct {
+	CSR *CSR `json:"csr"`
 }
 
-type RegisterResponse struct {
+type CertResponse struct {
 	CACert *Certificate `json:"ca_cert"`
 	Cert   *Certificate `json:"cert"`
 }
@@ -76,6 +76,36 @@ func (c *Certificate) UnmarshalText(data []byte) error {
 	}
 
 	*c = Certificate(*cert)
+
+	return nil
+}
+
+type RegisterRequest struct {
+	PrivateAddr netip.AddrPort
+	PublicAddr  netip.AddrPort
+}
+
+func (r *RegisterRequest) UnmarshalHTTP(req *http.Request) error {
+	var err error
+
+	r.PrivateAddr, err = netip.ParseAddrPort(req.URL.Query().Get("private_addr"))
+	if err != nil {
+		return fmt.Errorf("parse private addr: %w", err)
+	}
+
+	r.PublicAddr, err = netip.ParseAddrPort(req.URL.Query().Get("public_addr"))
+	if err != nil {
+		return fmt.Errorf("parse public addr: %w", err)
+	}
+
+	return nil
+}
+
+func (r *RegisterRequest) MarshalHTTP(req *http.Request) error {
+	q := req.URL.Query()
+	q.Set("private_addr", r.PrivateAddr.String())
+	q.Set("public_addr", r.PublicAddr.String())
+	req.URL.RawQuery = q.Encode()
 
 	return nil
 }

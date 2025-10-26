@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 
 	"github.com/dmksnnk/star/internal/errcode"
@@ -28,8 +27,7 @@ import (
 // but they are not.
 var ErrDatagramsNotEnabled = errors.New("datagrams are not enabled")
 
-func RegisterClient(ctx context.Context, tlsConf *tls.Config, base *url.URL, secret []byte, key auth.Key) (*RegisteredClient, error) {
-	tlsConfig := http3.ConfigureTLSConfig(tlsConf)
+func NewClient(ctx context.Context, quicTransport *quic.Transport, tlsConf *tls.Config, base *url.URL, secret []byte, key auth.Key) (*RegisteredClient, error) {
 	quicConfig := &quic.Config{
 		EnableDatagrams: true,
 	}
@@ -45,10 +43,16 @@ func RegisterClient(ctx context.Context, tlsConf *tls.Config, base *url.URL, sec
 	}
 
 	addr := base.Host
-	conn, err := quic.DialAddr(ctx, addr, tlsConfig, quicConfig)
+	updAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve UDP address: %w", err)
+	}
+
+	conn, err := quicTransport.Dial(ctx, updAddr, tlsConf, quicConfig)
 	if err != nil {
 		return nil, fmt.Errorf("dial QUIC: %w", err)
 	}
+
 	tr := &http3.Transport{
 		EnableDatagrams: quicConfig.EnableDatagrams,
 	}
@@ -67,10 +71,8 @@ func RegisterClient(ctx context.Context, tlsConf *tls.Config, base *url.URL, sec
 		return nil, ErrDatagramsNotEnabled
 	}
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr).AddrPort()
-	req := RegisterRequest{
-		PrivateAddr: localAddr,
-		CSR:         (*CSR)(csr),
+	req := CertRequest{
+		CSR: (*CSR)(csr),
 	}
 
 	var buf bytes.Buffer
@@ -78,7 +80,7 @@ func RegisterClient(ctx context.Context, tlsConf *tls.Config, base *url.URL, sec
 		return nil, fmt.Errorf("encode body: %w", err)
 	}
 
-	u := base.ResolveReference(&url.URL{Path: "/register"}).String()
+	u := base.ResolveReference(&url.URL{Path: "/session-cert"}).String()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -96,17 +98,18 @@ func RegisterClient(ctx context.Context, tlsConf *tls.Config, base *url.URL, sec
 		return nil, httpplatform.NewBadStatusCodeError(httpResp.StatusCode, httpResp.Body)
 	}
 
-	var resp RegisterResponse
+	var resp CertResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	return &RegisteredClient{
-		base:   base,
-		token:  token,
-		conn:   clientConn,
-		CACert: (*x509.Certificate)(resp.CACert),
-		Cert:   (*x509.Certificate)(resp.Cert),
+		base:       base,
+		token:      token,
+		conn:       clientConn,
+		CACert:     (*x509.Certificate)(resp.CACert),
+		Cert:       (*x509.Certificate)(resp.Cert),
+		privateKey: privateKey,
 	}, nil
 }
 
@@ -135,12 +138,26 @@ type RegisteredClient struct {
 	token auth.Token
 	conn  *http3.ClientConn
 
-	CACert *x509.Certificate
-	Cert   *x509.Certificate
+	CACert     *x509.Certificate
+	Cert       *x509.Certificate
+	privateKey *ecdsa.PrivateKey
 }
 
-func (rc *RegisteredClient) Host(ctx context.Context) (*http3.RequestStream, error) {
-	reqStream, err := rc.sendRequest(ctx, "/host")
+func (rc *RegisteredClient) Host(ctx context.Context, addrs AddrPair) (*http3.RequestStream, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.resolvePath("/host"), http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req := RegisterRequest{
+		PrivateAddr: addrs.Private,
+		PublicAddr:  addrs.Public,
+	}
+	if err := req.MarshalHTTP(httpReq); err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	reqStream, err := rc.sendRequest(ctx, httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("send host request: %w", err)
 	}
@@ -157,10 +174,23 @@ func (rc *RegisteredClient) Host(ctx context.Context) (*http3.RequestStream, err
 	return reqStream, nil
 }
 
-func (rc *RegisteredClient) Join(ctx context.Context) (*http3.RequestStream, error) {
-	reqStream, err := rc.sendRequest(ctx, "/join")
+func (rc *RegisteredClient) Join(ctx context.Context, addrs AddrPair) (*http3.RequestStream, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.resolvePath("/join"), http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("send join request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req := RegisterRequest{
+		PrivateAddr: addrs.Private,
+		PublicAddr:  addrs.Public,
+	}
+	if err := req.MarshalHTTP(httpReq); err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	reqStream, err := rc.sendRequest(ctx, httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 
 	httpResp, err := reqStream.ReadResponse()
@@ -175,24 +205,73 @@ func (rc *RegisteredClient) Join(ctx context.Context) (*http3.RequestStream, err
 	return reqStream, nil
 }
 
-func (rc *RegisteredClient) LocalAddr() netip.AddrPort {
-	return rc.conn.Conn().LocalAddr().(*net.UDPAddr).AddrPort()
+// TLSConfig returns a tls.Config that can be used to connect between peers.
+func (rc *RegisteredClient) TLSConfig() *tls.Config {
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rc.CACert)
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{
+			{
+				Certificate: [][]byte{rc.Cert.Raw},
+				PrivateKey:  rc.privateKey,
+			},
+		},
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  rootPool,
+		RootCAs:    rootPool,
+		NextProtos: []string{"star-p2p-1"},
+
+		ServerName: "star",
+		MinVersion: tls.VersionTLS13,
+
+		// Disable hostname checking for P2P; we’ll verify the chain explicitly.
+		InsecureSkipVerify: true,
+		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			// If we're the server, verifiedChains is already populated by Go's verifier.
+			if len(verifiedChains) > 0 {
+				return nil
+			}
+
+			// Client-side: verify the server's chain against our CA, without hostname.
+			if len(rawCerts) == 0 {
+				return errors.New("no server certificate")
+			}
+
+			leaf, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return err
+			}
+
+			inter := x509.NewCertPool()
+			for _, b := range rawCerts[1:] {
+				if c, err := x509.ParseCertificate(b); err == nil {
+					inter.AddCert(c)
+				}
+			}
+			_, err = leaf.Verify(x509.VerifyOptions{
+				Roots:         rootPool,
+				Intermediates: inter,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			return err
+		},
+	}
 }
 
-func (rc *RegisteredClient) sendRequest(ctx context.Context, path string) (*http3.RequestStream, error) {
+func (rc *RegisteredClient) Close() error {
+	return rc.conn.CloseWithError(errcode.Exit, "client closed")
+}
+
+func (rc *RegisteredClient) sendRequest(ctx context.Context, req *http.Request) (*http3.RequestStream, error) {
 	reqStream, err := rc.conn.OpenRequestStream(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("open request stream: %w", err)
 	}
 
-	u := rc.resolvePath(path)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set(headerToken, rc.token.String())
+	req.Header.Set(headerToken, rc.token.String())
 
-	if err := reqStream.SendRequestHeader(httpReq); err != nil {
+	if err := reqStream.SendRequestHeader(req); err != nil {
 		return nil, fmt.Errorf("send request header: %w", err)
 	}
 

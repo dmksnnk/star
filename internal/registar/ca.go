@@ -9,8 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
-	"net"
-	"net/netip"
 	"os"
 	"sync"
 	"time"
@@ -115,7 +113,7 @@ func newSessionCA(cert *x509.Certificate, privateKey crypto.PrivateKey) *Session
 	}
 }
 
-func (s *SessionCA) NewCert(public, private netip.AddrPort, csr *x509.CertificateRequest) ([]byte, error) {
+func (s *SessionCA) NewCert(csr *x509.CertificateRequest) ([]byte, error) {
 	if err := csr.CheckSignature(); err != nil {
 		return nil, fmt.Errorf("check signature: %w", err)
 	}
@@ -134,11 +132,12 @@ func (s *SessionCA) NewCert(public, private netip.AddrPort, csr *x509.Certificat
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 
-		Subject: pkix.Name{
-			// CommonName: peerID,
-		},
+		Subject: csr.Subject,
 		// SANs
-		IPAddresses: []net.IP{public.Addr().AsSlice(), private.Addr().AsSlice()},
+		DNSNames:       csr.DNSNames,
+		IPAddresses:    csr.IPAddresses,
+		EmailAddresses: csr.EmailAddresses,
+		URIs:           csr.URIs,
 	}
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &template, s.cert, csr.PublicKey, s.privateKey)
@@ -170,7 +169,7 @@ func NewAuthority(root RootCA) *Authority {
 
 // NewSessionCert returns a session's CA certificate and peer's certificate.
 // Peer should trust the session's CA certificate.
-func (a *Authority) NewSessionCert(key auth.Key, addrs AddrPair, csr *x509.CertificateRequest) (caCert *x509.Certificate, peerCert *x509.Certificate, err error) {
+func (a *Authority) NewSessionCert(key auth.Key, csr *x509.CertificateRequest) (caCert *x509.Certificate, peerCert *x509.Certificate, err error) {
 	a.mux.Lock()
 	defer a.mux.Unlock()
 
@@ -184,7 +183,7 @@ func (a *Authority) NewSessionCert(key auth.Key, addrs AddrPair, csr *x509.Certi
 		ca = sca
 	}
 
-	certBytes, err := ca.NewCert(addrs.Public, addrs.Private, csr)
+	certBytes, err := ca.NewCert(csr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create certificate: %w", err)
 	}
