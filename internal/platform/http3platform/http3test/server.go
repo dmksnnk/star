@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/cert"
-	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
@@ -106,19 +105,6 @@ func (s *Server) URL() *url.URL {
 	return &url.URL{
 		Scheme: "https",
 		Host:   s.conn.LocalAddr().String(),
-	}
-}
-
-// Dialer returns a new HTTP/3 dialer configure to with the server's CA.
-func (s *Server) Dialer() *http3platform.HTTP3Dialer {
-	clientTLSConf := s.TLSConfig()
-
-	return &http3platform.HTTP3Dialer{
-		TLSConfig: clientTLSConf,
-		QUICConfig: &quic.Config{
-			EnableDatagrams: true,
-		},
-		EnableExtendedConnect: true,
 	}
 }
 
