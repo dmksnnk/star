@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 	"sync"
 	"testing"
 
-	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/registar/integrationtest"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
@@ -17,15 +19,17 @@ import (
 func TestRegisterHost(t *testing.T) {
 	secret := []byte("secret")
 	reg := newFakeRegistar()
-	srv := newServer(t, secret, reg)
+	srv := integrationtest.NewServer(t, secret, reg)
 	key := auth.NewKey()
 
-	client, err := registar.RegisterClient(context.TODO(), srv.TLSConfig(), srv.URL(), secret, key)
-	if err != nil {
-		t.Fatalf("register client: %s", err)
+	client := integrationtest.NewClient(t, &quic.Transport{Conn: integrationtest.NewLocalUDPConn(t)}, srv, secret, key)
+
+	addrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("192.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("192.0.0.2:5678"),
 	}
 
-	connA, err := client.Host(context.TODO())
+	connA, err := client.Host(context.TODO(), addrs)
 	if err != nil {
 		t.Fatalf("Host: %s", err)
 	}
@@ -50,15 +54,17 @@ func TestRegisterHost(t *testing.T) {
 func TestRegisterJoin(t *testing.T) {
 	secret := []byte("secret")
 	reg := newFakeRegistar()
-	srv := newServer(t, secret, reg)
+	srv := integrationtest.NewServer(t, secret, reg)
 	key := auth.NewKey()
 
-	client, err := registar.RegisterClient(context.TODO(), srv.TLSConfig(), srv.URL(), secret, key)
-	if err != nil {
-		t.Fatalf("register client: %s", err)
+	client := integrationtest.NewClient(t, &quic.Transport{Conn: integrationtest.NewLocalUDPConn(t)}, srv, secret, key)
+
+	addrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("192.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("192.0.0.2:5678"),
 	}
 
-	connB, err := client.Join(context.TODO())
+	connB, err := client.Join(context.TODO(), addrs)
 	if err != nil {
 		t.Fatalf("Join: %s", err)
 	}
@@ -78,27 +84,6 @@ func TestRegisterJoin(t *testing.T) {
 	}()
 
 	testPipeConn(t, connA, connB)
-}
-
-func newServer(t *testing.T, secret []byte, reg registar.Registar) *http3test.Server {
-	t.Helper()
-
-	rootCA, err := registar.NewRootCA()
-	if err != nil {
-		t.Fatalf("NewRootCA error: %s", err)
-	}
-
-	caAuthority := registar.NewAuthority(rootCA)
-	api := registar.NewAPI(reg, caAuthority)
-	t.Cleanup(func() {
-		if err := api.Close(); err != nil {
-			t.Errorf("API Close: %v", err)
-		}
-	})
-
-	router := registar.NewRouter(api, secret)
-
-	return http3test.NewTestServer(t, router)
 }
 
 type fakeRegistar struct {

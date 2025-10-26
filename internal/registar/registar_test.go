@@ -2,6 +2,7 @@ package registar_test
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
+	"github.com/dmksnnk/star/internal/registar/integrationtest"
 	"go.uber.org/goleak"
 	"golang.org/x/sync/errgroup"
 )
@@ -35,14 +37,15 @@ func TestRegistar_notifiesOnSessionDone(t *testing.T) {
 	})
 
 	secret := []byte("secret")
-	srv := newServer(t, secret, reg)
+	srv := integrationtest.NewServer(t, secret, reg)
 
-	host, err := registar.RegisterClient(context.TODO(), srv.TLSConfig(), srv.URL(), secret, key)
-	if err != nil {
-		t.Fatalf("register client: %s", err)
+	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+
+	hostAddrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
-
-	stream, err := host.Host(context.TODO())
+	stream, err := host.Host(context.TODO(), hostAddrs)
 	if err != nil {
 		t.Fatalf("Host: %s", err)
 	}
@@ -76,16 +79,18 @@ func TestRegistar_JoinSession(t *testing.T) {
 	})
 
 	secret := []byte("secret")
-	srv := newServer(t, secret, reg)
+	srv := integrationtest.NewServer(t, secret, reg)
 
-	host, err := registar.RegisterClient(context.TODO(), srv.TLSConfig(), srv.URL(), secret, key)
-	if err != nil {
-		t.Fatalf("register host: %s", err)
+	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+	peer := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+
+	hostAddrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
-
-	peer, err := registar.RegisterClient(context.TODO(), srv.TLSConfig(), srv.URL(), secret, key)
-	if err != nil {
-		t.Fatalf("register peer: %s", err)
+	peerAddrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
 
 	joined := make(chan struct{})
@@ -94,24 +99,31 @@ func TestRegistar_JoinSession(t *testing.T) {
 			t.Errorf("expected key %q, got %q", key, k)
 		}
 
-		if peer.LocalAddr() != addrs.Private {
-			t.Errorf("expected private address %q, got %q", peer.LocalAddr(), addrs.Private)
+		if peerAddrs.Private != addrs.Private {
+			t.Errorf("expected private address %q, got %q", peerAddrs.Private, addrs.Private)
+		}
+		if peerAddrs.Public != addrs.Public {
+			t.Errorf("expected public address %q, got %q", peerAddrs.Public, addrs.Public)
 		}
 
 		close(joined)
 	})
 
-	hostStream, err := host.Host(context.TODO())
+	hostStream, err := host.Host(context.TODO(), hostAddrs)
 	if err != nil {
 		t.Fatalf("Host: %s", err)
 	}
 
 	hostAgent := control.NewAgent()
 	hostAgentCalled := make(chan struct{})
-	hostAgent.OnConnectTo(func(cmd control.ConnectCommand) (bool, error) {
-		if cmd.PrivateAddress != peer.LocalAddr() {
-			t.Errorf("expected to receive peer's private address %q, got %q", peer.LocalAddr(), cmd.PrivateAddress)
+	hostAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
+		if cmd.PrivateAddress != peerAddrs.Private {
+			t.Errorf("expected to receive peer's private address %q, got %q", peerAddrs.Private, cmd.PrivateAddress)
 		}
+		if cmd.PublicAddress != peerAddrs.Public {
+			t.Errorf("expected to receive peer's public address %q, got %q", peerAddrs.Public, cmd.PublicAddress)
+		}
+
 		close(hostAgentCalled)
 		return true, nil
 	})
@@ -119,16 +131,20 @@ func TestRegistar_JoinSession(t *testing.T) {
 		return hostAgent.Serve(hostStream)
 	})
 
-	peerStream, err := peer.Join(context.TODO())
+	peerStream, err := peer.Join(context.TODO(), peerAddrs)
 	if err != nil {
 		t.Fatalf("Join: %s", err)
 	}
 
 	peerAgent := control.NewAgent()
 	peerAgentCalled := make(chan struct{})
-	peerAgent.OnConnectTo(func(cmd control.ConnectCommand) (bool, error) {
-		if cmd.PrivateAddress != host.LocalAddr() {
-			t.Errorf("expected to receive host's private address %q, got %q", host.LocalAddr(), cmd.PrivateAddress)
+	peerAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
+		if cmd.PrivateAddress != hostAddrs.Private {
+			t.Errorf("expected to receive host's private address %q, got %q", hostAddrs.Private, cmd.PrivateAddress)
+		}
+
+		if cmd.PublicAddress != hostAddrs.Public {
+			t.Errorf("expected to receive host's public address %q, got %q", hostAddrs.Public, cmd.PublicAddress)
 		}
 
 		close(peerAgentCalled)
