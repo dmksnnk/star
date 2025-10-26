@@ -115,7 +115,6 @@ func (r *Response) UnmarshalBinary(p []byte) error {
 // Bind sends a binding request to the given server and returns the public
 // address as observed by the server.
 func Bind(conn net.PacketConn, server netip.AddrPort) (netip.AddrPort, error) {
-	// Build request
 	req, err := NewRequest()
 	if err != nil {
 		return netip.AddrPort{}, err

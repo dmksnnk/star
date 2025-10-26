@@ -81,12 +81,12 @@ func TestBindLoopback(t *testing.T) {
 	})
 
 	server := serverConn.LocalAddr().(*net.UDPAddr).AddrPort()
-	ap, err := discovery.Bind(clientConn, server)
+	publicAddr, err := discovery.Bind(clientConn, server)
 	if err != nil {
 		t.Fatalf("Bind error: %v", err)
 	}
 
-	if clientConn.LocalAddr().(*net.UDPAddr).AddrPort().Compare(ap) != 0 {
-		t.Fatalf("expected %v, got: %v", clientConn.LocalAddr(), ap)
+	if clientConn.LocalAddr().(*net.UDPAddr).AddrPort().Compare(publicAddr) != 0 {
+		t.Fatalf("expected %v, got: %v", clientConn.LocalAddr(), publicAddr)
 	}
 }
