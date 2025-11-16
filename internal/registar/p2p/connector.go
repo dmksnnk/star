@@ -70,6 +70,8 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
 	defer acceptCancel()
 	eg.Go(func() error {
+		defer close(accepted)
+
 		for {
 			conn, err := earlyListener.Accept(acceptCtx)
 			if err != nil {
@@ -121,6 +123,8 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	publicReqCtx, publicReqCancel := context.WithCancel(ctx)
 	defer publicReqCancel()
 	eg.Go(func() error {
+defer close(publicDialled)
+
 		for {
 			conn, err := c.dial(publicReqCtx, public)
 			if err != nil {
@@ -170,6 +174,8 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	if public != private { // TODO: refactor
 		privateDialled = make(chan *quic.Conn)
 		eg.Go(func() error {
+			defer close(privateDialled)
+
 			for {
 				conn, err := c.dial(privateReqCtx, private)
 				if err != nil {
@@ -217,16 +223,31 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	case conn := <-accepted:
 		publicReqCancel()
 		privateReqCancel()
-		c.logger.Info("connection accepted")
+
+		if err := eg.Wait(); err != nil {
+			return nil, err
+		}
+
+		c.logger.Info("connection established via accept")
 		return conn, eg.Wait()
 	case conn := <-publicDialled:
 		acceptCancel()
 		privateReqCancel()
+
+		if err := eg.Wait(); err != nil {
+			return nil, err
+		}
+
 		c.logger.Info("connection established via public dial")
-		return conn, eg.Wait()
+		return conn, nil
 	case conn := <-privateDialled:
 		acceptCancel()
 		publicReqCancel()
+
+		if err := eg.Wait(); err != nil {
+			return nil, err
+		}
+
 		c.logger.Info("connection established via private dial")
 		return conn, eg.Wait()
 	case <-ctx.Done():
