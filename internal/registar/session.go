@@ -15,7 +15,6 @@ import (
 
 const (
 	defaultConnectTimeout = time.Minute
-	defaultQueueSize      = 10
 )
 
 type AddrPair struct {

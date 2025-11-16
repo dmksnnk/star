@@ -13,6 +13,11 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
+var (
+	ErrHostNotFound      = errors.New("host not found")
+	ErrHostAlreadyExists = errors.New("host already exists")
+)
+
 type Registar2 struct {
 	mux   sync.RWMutex
 	hosts map[auth.Key]Peer
