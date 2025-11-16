@@ -169,12 +169,30 @@ func Bind(conn net.PacketConn, server netip.AddrPort) (netip.AddrPort, error) {
 	}
 }
 
-// Serve handles incoming binding requests on the provided PacketConn until ctx is done.
-// It responds with the sender's observed address.
-func Serve(conn net.PacketConn) error {
+// Server represents a discovery server.
+type Server struct {
+	done chan struct{}
+}
+
+// NewServer creates a new discovery server.
+func NewServer() *Server {
+	return &Server{
+		done: make(chan struct{}),
+	}
+}
+
+// Serve handles incoming binding requests on the provided PacketConn.
+// It blocks until the server is closed.
+func (s *Server) Serve(conn net.PacketConn) error {
 	buf := make([]byte, 1024)
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		select {
+		case <-s.done:
+			return nil
+		default:
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, raddr, err := conn.ReadFrom(buf)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -203,6 +221,17 @@ func Serve(conn net.PacketConn) error {
 			return err
 		}
 
-		_, _ = conn.WriteTo(data, raddr)
+		_, err = conn.WriteTo(data, raddr)
+		if err != nil {
+			conn.SetDeadline(time.Time{})
+			return err
+		}
 	}
+}
+
+// Close stops the discovery server.
+// Wait for any ongoing Serve calls to return to release resources.
+func (s *Server) Close() error {
+	close(s.done)
+	return nil
 }

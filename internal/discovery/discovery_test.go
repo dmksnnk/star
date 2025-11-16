@@ -1,13 +1,12 @@
 package discovery_test
 
 import (
-	"errors"
 	"net"
 	"net/netip"
 	"testing"
 
 	"github.com/dmksnnk/star/internal/discovery"
-	"golang.org/x/sync/errgroup"
+	"github.com/dmksnnk/star/internal/registar/integrationtest"
 )
 
 func TestRequestMarshalUnmarshal(t *testing.T) {
@@ -53,34 +52,11 @@ func TestResponseMarshalUnmarshal(t *testing.T) {
 }
 
 func TestBindLoopback(t *testing.T) {
-	localUDPAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
-
-	serverConn, err := net.ListenUDP("udp", localUDPAddr)
-	if err != nil {
-		t.Fatalf("ListenUDP: %v", err)
-	}
-
-	var eg errgroup.Group
-	eg.Go(func() error {
-		return discovery.Serve(serverConn)
-	})
-	t.Cleanup(func() {
-		serverConn.Close()
-		if err := eg.Wait(); !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("Serve error: %v", err)
-		}
-	})
+	server := integrationtest.ServeDiscovery(t)
 
 	// Client side socket
-	clientConn, err := net.ListenUDP("udp", localUDPAddr)
-	if err != nil {
-		t.Fatalf("client ListenPacket: %v", err)
-	}
-	t.Cleanup(func() {
-		clientConn.Close()
-	})
+	clientConn := integrationtest.NewLocalUDPConn(t)
 
-	server := serverConn.LocalAddr().(*net.UDPAddr).AddrPort()
 	publicAddr, err := discovery.Bind(clientConn, server)
 	if err != nil {
 		t.Fatalf("Bind error: %v", err)
