@@ -25,22 +25,6 @@ func NewController(conn io.ReadWriter) *Controller {
 	}
 }
 
-// InitRelayStream asks the [Agent] (follower) to initiate a forward request to the relay.
-func (c *Controller) InitRelayStream(ctx context.Context, peerID string) error {
-	cmd := RequestForwardCommand{
-		PeerID: peerID,
-	}
-	return c.do(ctx, http.MethodPost, "/relay-peer", cmd)
-}
-
-// JoinViaRelay asks the [Agent] (follower) to join a session via relay.
-func (c *Controller) JoinViaRelay(ctx context.Context, peerID string) error {
-	cmd := RequestJoin{
-		PeerID: peerID,
-	}
-	return c.do(ctx, http.MethodPost, "/join-relay", cmd)
-}
-
 // ConnectTo asks the peer to do hole-punching, by trying to establish
 // connection to public or private addresses.
 func (c *Controller) ConnectTo(ctx context.Context, public, private netip.AddrPort) error {
@@ -96,13 +80,5 @@ type ConnectCommand struct {
 	PrivateAddress netip.AddrPort `json:"private_address"`
 }
 
-// RequestForwardCommand is a command to ask Registar to forward peer connection to you.
-type RequestForwardCommand struct {
-	PeerID string `json:"peer_id"`
-}
-
-type RequestJoin struct {
-	PeerID string `json:"peer_id"`
-}
-
+// ErrConnectFailed is returned when attempt to connect to a peer fails.
 var ErrConnectFailed = errors.New("connect failed")

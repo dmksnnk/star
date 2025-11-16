@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,23 +20,8 @@ func NewAgent() *Agent {
 	}
 }
 
-// OnRequestForward registers a callback on command to forward connection from Registar.
-func (a *Agent) OnRequestForward(f func(RequestForwardCommand) error) {
-	a.mux.HandleFunc("POST /forward", func(w http.ResponseWriter, r *http.Request) {
-		var cmd RequestForwardCommand
-		if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		if err := f(cmd); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-	})
-}
-
 // OnConnectTo registers a callback on command to connect to another peer.
-func (a *Agent) OnConnectTo(f func(ConnectCommand) (bool, error)) {
+func (a *Agent) OnConnectTo(f func(ctx context.Context, cmd ConnectCommand) (bool, error)) {
 	a.mux.HandleFunc("POST /connect-to", func(w http.ResponseWriter, r *http.Request) {
 		var cmd ConnectCommand
 		if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
@@ -43,7 +29,7 @@ func (a *Agent) OnConnectTo(f func(ConnectCommand) (bool, error)) {
 			return
 		}
 
-		ok, err := f(cmd)
+		ok, err := f(r.Context(), cmd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

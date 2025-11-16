@@ -16,38 +16,13 @@ func TestAgent(t *testing.T) {
 	public := netip.MustParseAddrPort("10.0.0.1:1234")
 	private := netip.MustParseAddrPort("10.0.1.1:5678")
 
-	t.Run("request forward", func(t *testing.T) {
-		conn1, conn2 := net.Pipe()
-		registar := control.NewController(conn1)
-		agent := control.NewAgent()
-		cmds := make(chan control.RequestForwardCommand, 1)
-		agent.OnRequestForward(func(rfc control.RequestForwardCommand) error {
-			cmds <- rfc
-			return nil
-		})
-
-		serverAgent(t, agent, conn2)
-
-		if err := registar.DoRequestForward(context.TODO(), "test"); err != nil {
-			t.Errorf("do request forward: %s", err)
-		}
-
-		want := control.RequestForwardCommand{
-			PeerID: "test",
-		}
-		got := <-cmds
-		if want != got {
-			t.Errorf("unexpected command, want: %#v, got: %#v", want, got)
-		}
-	})
-
 	t.Run("connect to", func(t *testing.T) {
 		t.Run("connect successful", func(t *testing.T) {
 			conn1, conn2 := net.Pipe()
 			registar := control.NewController(conn1)
 			agent := control.NewAgent()
 			cmds := make(chan control.ConnectCommand, 1)
-			agent.OnConnectTo(func(cmd control.ConnectCommand) (bool, error) {
+			agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
 				cmds <- cmd
 				return true, nil
 			})
@@ -72,7 +47,7 @@ func TestAgent(t *testing.T) {
 			conn1, conn2 := net.Pipe()
 			registar := control.NewController(conn1)
 			agent := control.NewAgent()
-			agent.OnConnectTo(func(cmd control.ConnectCommand) (bool, error) {
+			agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
 				return false, nil
 			})
 
