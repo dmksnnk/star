@@ -7,10 +7,14 @@ import (
 	"testing"
 
 	"github.com/dmksnnk/star/internal/discovery"
+	"github.com/dmksnnk/star/internal/errcode"
 	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/sync/errgroup"
 )
 
 var Localhost = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
@@ -22,6 +26,12 @@ func NewLocalUDPConn(t *testing.T) *net.UDPConn {
 	if err != nil {
 		t.Fatalf("listen UDP: %s", err)
 	}
+
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close UDP conn: %v", err)
+		}
+	})
 
 	return conn
 }
@@ -72,4 +82,24 @@ func NewClient(t *testing.T, tr *quic.Transport, srv *http3test.Server, secret [
 	})
 
 	return client
+}
+
+func ServeAgent(t *testing.T, agent *control.Agent, stream *http3.RequestStream) {
+	t.Helper()
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return agent.Serve(stream)
+	})
+
+	t.Cleanup(func() {
+		stream.CancelRead(errcode.Cancelled)
+		stream.CancelWrite(errcode.Cancelled)
+
+		if err := eg.Wait(); err != nil {
+			if !errcode.IsLocalHTTPError(err, errcode.Cancelled) && !errcode.IsLocalStreamError(err, errcode.Cancelled) {
+				t.Errorf("serve agent: %s", err)
+			}
+		}
+	})
 }

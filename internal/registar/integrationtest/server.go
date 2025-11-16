@@ -1,7 +1,6 @@
 package integrationtest
 
 import (
-	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -9,6 +8,7 @@ import (
 	"github.com/dmksnnk/star/internal/discovery"
 	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
+	"github.com/dmksnnk/star/internal/relay"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -33,23 +33,48 @@ func NewServer(t *testing.T, secret []byte, reg registar.Registar) *http3test.Se
 	return http3test.NewTestServer(t, router)
 }
 
-func RunDiscovery(t *testing.T) netip.AddrPort {
+func ServeDiscovery(t *testing.T) netip.AddrPort {
 	conn := NewLocalUDPConn(t)
+
+	d := discovery.NewServer()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		return discovery.Serve(conn)
+		return d.Serve(conn)
 	})
 
 	t.Cleanup(func() {
-		if err := conn.Close(); err != nil {
-			t.Error("close discovery conn:", err)
+		if err := d.Close(); err != nil {
+			t.Errorf("close discovery server: %v", err)
 		}
 
-		if err := eg.Wait(); !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("Serve error: %v", err)
+		if err := eg.Wait(); err != nil {
+			t.Fatalf("serve discovery: %s", err)
 		}
 	})
 
 	return conn.LocalAddr().(*net.UDPAddr).AddrPort()
+}
+
+func ServeRelay(t *testing.T, ops ...relay.Option) (*relay.UDPRelay, netip.AddrPort) {
+	conn := NewLocalUDPConn(t)
+
+	r := relay.NewUDPRelay(ops...)
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return r.Serve(conn)
+	})
+
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("close relay: %v", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			t.Errorf("serve relay: %s", err)
+		}
+	})
+
+	return r, conn.LocalAddr().(*net.UDPAddr).AddrPort()
 }
