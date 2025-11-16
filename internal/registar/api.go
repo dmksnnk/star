@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
@@ -16,8 +15,7 @@ import (
 )
 
 const (
-	pathValuePeerID = "peerID"
-	headerToken     = "Token"
+	headerToken = "Token"
 )
 
 // API is a HTTP API for registar service.
@@ -112,31 +110,6 @@ func (a *API) Close() error {
 	return nil
 }
 
-// // Forward forwards a peer's conn to the game host conn.
-// func (a API) Forward(w http.ResponseWriter, r *http.Request) {
-// 	if !a.validateHTTP3Settings(w) {
-// 		return
-// 	}
-
-// 	key, _ := auth.KeyFromContext(r.Context())
-// 	peerID := r.PathValue(pathValuePeerID)
-// 	if peerID == "" {
-// 		http.Error(w, "missing peer id", http.StatusBadRequest)
-// 		return
-// 	}
-
-// 	streamer := w.(http3.HTTPStreamer)
-// 	if err := a.service.Forward(r.Context(), key, peerID, streamer); err != nil {
-// 		if errors.Is(err, registar.ErrPeerNotFound) {
-// 			http.Error(w, err.Error(), http.StatusNotFound)
-// 			return
-// 		}
-
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-// }
-
 func (a *API) validateHTTP3Settings(w http.ResponseWriter) bool {
 	conn := w.(http3.Hijacker).Connection()
 	// wait for the client's SETTINGS
@@ -197,71 +170,5 @@ func NewRouter(api *API, secret []byte) *http.ServeMux {
 		),
 	)
 
-	// mux.Handle(
-	// 	"CONNECT /games/{token}/forward/{peerID}",
-	// 	httpplatform.Wrap(
-	// 		http.HandlerFunc(api.Forward),
-	// 		httpplatform.Authenticate(secret, httpplatform.TokenFromPathValue("token")),
-	// 	),
-	// )
-
 	return mux
-}
-
-type Waiter[T any] struct {
-	V T
-	c chan struct{}
-}
-
-func newWaiter[T any](v T) Waiter[T] {
-	return Waiter[T]{
-		V: v,
-		c: make(chan struct{}),
-	}
-}
-
-func (w Waiter[T]) Wait(ctx context.Context) bool {
-	select {
-	case <-w.c:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func (w Waiter[T]) Done() {
-	close(w.c)
-}
-
-type KVStore[K comparable, V any] struct {
-	mu   sync.RWMutex
-	data map[K]V
-}
-
-func NewKVStore[K comparable, V any]() *KVStore[K, V] {
-	return &KVStore[K, V]{
-		data: make(map[K]V),
-	}
-}
-
-func (s *KVStore[K, V]) Get(key K) (V, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	v, ok := s.data[key]
-	return v, ok
-}
-
-func (s *KVStore[K, V]) Set(key K, v V) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.data[key] = v
-}
-
-func (s *KVStore[K, V]) Delete(key K) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	delete(s.data, key)
 }

@@ -6,79 +6,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/errcode"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/integrationtest"
 	"go.uber.org/goleak"
-	"golang.org/x/sync/errgroup"
 )
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-func TestRegistar_notifiesOnSessionDone(t *testing.T) {
+func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 	key := auth.NewKey()
-
-	reg := registar.NewRegistar2()
-	sessionDone := make(chan struct{})
-	reg.OnSessionDone(func(k auth.Key, err error) {
-		defer close(sessionDone)
-
-		if k != key {
-			t.Errorf("expected key %q, got %q", key, k)
-		}
-
-		if !errcode.IsRemoteStreamError(err, errcode.HostClosed) {
-			t.Errorf("expected a remote stream error with code HostClosed, got %v", err)
-		}
-	})
-
 	secret := []byte("secret")
-	srv := integrationtest.NewServer(t, secret, reg)
 
-	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+	relay, relayAddr := integrationtest.ServeRelay(t)
 
-	hostAddrs := registar.AddrPair{
-		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
-		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
-	}
-	stream, err := host.Host(context.TODO(), hostAddrs)
-	if err != nil {
-		t.Fatalf("Host: %s", err)
-	}
+	reg := registar.NewRegistar2(relayAddr, relay)
 
-	stream.CancelRead(errcode.HostClosed)
-
-	wait(t, sessionDone)
-
-	_, ok := reg.Session(key)
-	if ok {
-		t.Errorf("expected session to be removed after done notification")
-	}
-}
-
-func TestRegistar_JoinSession(t *testing.T) {
-	key := auth.NewKey()
-	var agentsWg errgroup.Group
-
-	reg := registar.NewRegistar2()
-	sessionDone := make(chan struct{})
-	reg.OnSessionDone(func(k auth.Key, err error) {
-		defer close(sessionDone)
-
-		if k != key {
-			t.Errorf("expected key %q, got %q", key, k)
-		}
-
-		if !errcode.IsRemoteStreamError(err, errcode.Cancelled) {
-			t.Errorf("expected a remote stream error with code Cancelled, got %v", err)
-		}
-	})
-
-	secret := []byte("secret")
 	srv := integrationtest.NewServer(t, secret, reg)
 
 	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
@@ -92,22 +38,6 @@ func TestRegistar_JoinSession(t *testing.T) {
 		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
 		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
-
-	joined := make(chan struct{})
-	reg.OnJoined(func(k auth.Key, addrs registar.AddrPair) {
-		if k != key {
-			t.Errorf("expected key %q, got %q", key, k)
-		}
-
-		if peerAddrs.Private != addrs.Private {
-			t.Errorf("expected private address %q, got %q", peerAddrs.Private, addrs.Private)
-		}
-		if peerAddrs.Public != addrs.Public {
-			t.Errorf("expected public address %q, got %q", peerAddrs.Public, addrs.Public)
-		}
-
-		close(joined)
-	})
 
 	hostStream, err := host.Host(context.TODO(), hostAddrs)
 	if err != nil {
@@ -127,9 +57,7 @@ func TestRegistar_JoinSession(t *testing.T) {
 		close(hostAgentCalled)
 		return true, nil
 	})
-	agentsWg.Go(func() error {
-		return hostAgent.Serve(hostStream)
-	})
+	integrationtest.ServeAgent(t, hostAgent, hostStream)
 
 	peerStream, err := peer.Join(context.TODO(), peerAddrs)
 	if err != nil {
@@ -150,36 +78,78 @@ func TestRegistar_JoinSession(t *testing.T) {
 		close(peerAgentCalled)
 		return true, nil
 	})
-	agentsWg.Go(func() error {
-		return peerAgent.Serve(peerStream)
-	})
+	integrationtest.ServeAgent(t, peerAgent, peerStream)
 
 	wait(t, hostAgentCalled)
 	wait(t, peerAgentCalled)
-	wait(t, joined)
+}
 
-	_, ok := reg.Session(key)
-	if !ok {
-		t.Error("expected session to exist")
+func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
+	key := auth.NewKey()
+	secret := []byte("secret")
+
+	relay, relayAddr := integrationtest.ServeRelay(t)
+
+	reg := registar.NewRegistar2(relayAddr, relay)
+
+	srv := integrationtest.NewServer(t, secret, reg)
+
+	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+	peer := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+
+	hostAddrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
+	}
+	peerAddrs := registar.AddrPair{
+		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
+		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
 
-	peerStream.CancelRead(errcode.Cancelled)
-	peerStream.CancelWrite(errcode.Cancelled)
-	hostStream.CancelRead(errcode.Cancelled)
-	hostStream.CancelWrite(errcode.Cancelled)
+	hostStream, err := host.Host(context.TODO(), hostAddrs)
+	if err != nil {
+		t.Fatalf("Host: %s", err)
+	}
 
-	if err := agentsWg.Wait(); err != nil {
-		if !errcode.IsLocalHTTPError(err, errcode.Cancelled) {
-			t.Errorf("expected a local HTTP3 error with code Cancelled, got %v", err)
+	hostAgent := control.NewAgent()
+	hostAgentConnectRelayCalled := make(chan struct{})
+	hostAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
+		if cmd.PrivateAddress == peerAddrs.Private && cmd.PublicAddress == peerAddrs.Public {
+			return false, nil // simultate P2P failure
 		}
+
+		if cmd.PrivateAddress == relayAddr && cmd.PublicAddress == relayAddr {
+			close(hostAgentConnectRelayCalled)
+			return true, nil // relay connection success
+		}
+
+		return true, nil
+	})
+	integrationtest.ServeAgent(t, hostAgent, hostStream)
+
+	peerStream, err := peer.Join(context.TODO(), peerAddrs)
+	if err != nil {
+		t.Fatalf("Join: %s", err)
 	}
 
-	wait(t, sessionDone)
+	peerAgent := control.NewAgent()
+	peerAgentConnectRelayCalled := make(chan struct{})
+	peerAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
+		if cmd.PrivateAddress == hostAddrs.Private && cmd.PublicAddress == hostAddrs.Public {
+			return false, nil // simultate P2P failure
+		}
 
-	_, ok = reg.Session(key)
-	if ok {
-		t.Errorf("expected session to be removed after done notification")
-	}
+		if cmd.PrivateAddress == relayAddr && cmd.PublicAddress == relayAddr {
+			close(peerAgentConnectRelayCalled)
+			return true, nil // relay connection success
+		}
+
+		return true, nil
+	})
+	integrationtest.ServeAgent(t, peerAgent, peerStream)
+
+	wait(t, hostAgentConnectRelayCalled)
+	wait(t, peerAgentConnectRelayCalled)
 }
 
 func wait[T any](t *testing.T, ch <-chan T) T {

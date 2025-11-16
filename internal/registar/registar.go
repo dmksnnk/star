@@ -2,30 +2,34 @@ package registar
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
 	"sync"
 
 	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/registar/control"
+	"github.com/dmksnnk/star/internal/relay"
 	"github.com/quic-go/quic-go/http3"
 )
 
 type Registar2 struct {
-	wg       sync.WaitGroup
-	mux      sync.RWMutex
-	sessions map[auth.Key]*Session
+	mux   sync.RWMutex
+	hosts map[auth.Key]Peer
 
-	notifySessionDone []func(auth.Key, error)
-	notifyJoined      []func(auth.Key, AddrPair)
-
-	// relay *Relay
+	relayAddr netip.AddrPort
+	relay     *relay.UDPRelay
 }
+
+// TODO: implement host removal on host disconnect
 
 var _ Registar = (*Registar2)(nil)
 
-func NewRegistar2() *Registar2 {
+func NewRegistar2(relayAddr netip.AddrPort, relay *relay.UDPRelay) *Registar2 {
 	return &Registar2{
-		sessions: make(map[auth.Key]*Session),
-		// TODO: create relay
+		hosts:     make(map[auth.Key]Peer),
+		relayAddr: relayAddr,
+		relay:     relay,
 	}
 }
 
@@ -38,31 +42,12 @@ func (r *Registar2) Host(
 	r.mux.Lock()
 	defer r.mux.Unlock()
 
-	if _, ok := r.sessions[key]; ok {
+	if _, ok := r.hosts[key]; ok {
 		return ErrHostAlreadyExists
 	}
 	stream := streamer.HTTPStream()
 
-	sess := NewSession(addrs, stream)
-	r.sessions[key] = sess
-
-	// start monitoring host disconnect
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-
-		ctx := stream.Context()
-		<-ctx.Done()
-
-		r.mux.Lock()
-		sess.Close()
-		delete(r.sessions, key)
-		r.mux.Unlock()
-
-		for _, notify := range r.notifySessionDone {
-			notify(key, context.Cause(ctx))
-		}
-	}()
+	r.hosts[key] = NewPeer(addrs, stream)
 
 	return nil
 }
@@ -73,88 +58,32 @@ func (r *Registar2) Join(
 	streamer http3.HTTPStreamer,
 	addrs AddrPair,
 ) error {
-	sess, ok := r.Session(key)
+	host, ok := r.host(key)
 	if !ok {
 		return ErrHostNotFound
 	}
+	peer := NewPeer(addrs, streamer.HTTPStream())
 
-	if err := sess.Join(ctx, addrs, streamer.HTTPStream()); err != nil {
-		return fmt.Errorf("join session: %w", err)
-	}
+	if err := initP2P(ctx, host, peer); err != nil {
+		if !errors.Is(err, control.ErrConnectFailed) {
+			return fmt.Errorf("init P2P connection: %w", err)
+		}
 
-	for _, notify := range r.notifyJoined {
-		notify(key, addrs)
+		r.relay.AddRoute(host.addrs.Public, peer.addrs.Public)
+		if err := initRelay(ctx, host, peer, r.relayAddr); err != nil {
+			return fmt.Errorf("init relay connection: %w", err)
+		}
+
+		return nil
 	}
 
 	return nil
 }
 
-func (r *Registar2) OnSessionDone(f func(auth.Key, error)) {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-
-	r.notifySessionDone = append(r.notifySessionDone, f)
-}
-
-func (r *Registar2) OnJoined(f func(auth.Key, AddrPair)) {
-	r.mux.Lock()
-	defer r.mux.Unlock()
-
-	r.notifyJoined = append(r.notifyJoined, f)
-}
-
-func (r *Registar2) Session(key auth.Key) (*Session, bool) {
+func (r *Registar2) host(key auth.Key) (Peer, bool) {
 	r.mux.RLock()
 	defer r.mux.RUnlock()
-	sess, ok := r.sessions[key]
 
-	return sess, ok
+	host, ok := r.hosts[key]
+	return host, ok
 }
-
-func (r *Registar2) Close() error {
-	r.mux.Lock()
-	for k, sess := range r.sessions {
-		sess.Close()
-		for _, notify := range r.notifySessionDone {
-			notify(k, nil)
-		}
-		delete(r.sessions, k)
-	}
-
-	defer r.mux.Unlock()
-
-	r.wg.Wait()
-	return nil
-}
-
-// // JoinRelay joins a peer into session via relay.
-// func (r *Registar2) JoinRelay(ctx context.Context, key auth.Key, peerID string, stream *http3.Stream) error {
-// 	return r.relay.AddWaiting(key, peerID, stream)
-
-// 	// sess, ok := r.session(key)
-// 	// if !ok {
-// 	// 	return ErrHostNotFound
-// 	// }
-
-// 	// if err := sess.JoinRelay(context.Background(), peerID, stream); err != nil {
-// 	// 	return fmt.Errorf("join via relay: %w", err)
-// 	// }
-
-// 	// return nil
-// }
-
-// // RelayPeer connects a peer to host via relay.
-// func (r *Registar2) RelayPeer(ctx context.Context, key auth.Key, peerID string, stream *http3.Stream) error {
-// 	return r.relay.Relay(ctx, key, peerID, stream)
-
-// 	// sess, ok := r.session(key)
-// 	// if !ok {
-// 	// 	return ErrHostNotFound
-// 	// }
-
-// 	// if err := sess.RelayPeer(ctx, peerID, stream); err != nil {
-// 	// 	return fmt.Errorf("relay peer: %w", err)
-// 	// }
-
-// 	// return nil
-// }
