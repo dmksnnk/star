@@ -120,11 +120,15 @@ func (l *Listener) dispatch(addr net.Addr, packet []byte) error {
 		select {
 		case conn.reads <- packet:
 			return nil
-		case <-l.done:
-			return ErrClosedListener
 		default:
 			return ErrReadBufferExceeded
 		}
+	}
+
+	select {
+	case <-l.done:
+		return ErrClosedListener
+	default:
 	}
 
 	// conn not found, create new one
@@ -179,7 +183,8 @@ func (l *Listener) Addr() net.Addr {
 
 // Close closes the listener.
 // Any blocked [Listener.Accept] operations will be unblocked and return ErrClosedListener.
-// But, it will still process incoming reads as connections until there are no connections left.
+// Already accepted connections are not closed.
+// Underlying [net.PacketConn] is closed when there are no accepted connections left.
 func (l *Listener) Close() error {
 	// lock to not add new connections and avoid races on multiple calls to close
 	l.connLock.Lock()
