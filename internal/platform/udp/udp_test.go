@@ -124,7 +124,7 @@ func TestUDPConn(t *testing.T) {
 					copy(b1, b2) // Mutate b1 to trigger potential race
 					if err != nil {
 						// timeout is expected here, as we set a short deadline
-						if !errors.Is(err, context.DeadlineExceeded) {
+						if !errors.Is(err, os.ErrDeadlineExceeded) {
 							t.Error("failed to read from customConn:", err)
 						}
 						customConn.SetReadDeadline(time.Now().Add(time.Millisecond))
@@ -163,7 +163,7 @@ func TestUDPConn(t *testing.T) {
 					copy(b1, b2) // Mutate b1 to trigger potential race
 					if err != nil {
 						// timeout is expected here, as we set a short deadline
-						if !errors.Is(err, context.DeadlineExceeded) {
+						if !errors.Is(err, os.ErrDeadlineExceeded) {
 							t.Error("failed to write to customConn:", err)
 						}
 						customConn.SetWriteDeadline(time.Now().Add(time.Millisecond))
@@ -193,13 +193,13 @@ func TestUDPConn(t *testing.T) {
 
 		customConn.SetDeadline(time.Now().Add(-time.Millisecond))
 		_, err := customConn.Write([]byte("hello"))
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("expected deadline exceeded error, got: %v", err)
 		}
 
 		buf := make([]byte, 5)
 		_, err = customConn.Read(buf)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("expected deadline exceeded error, got: %v", err)
 		}
 	})
