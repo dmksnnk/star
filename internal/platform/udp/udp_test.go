@@ -2,19 +2,17 @@ package udp_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/platform"
 	"github.com/dmksnnk/star/internal/platform/udp"
 	"go.uber.org/goleak"
 )
@@ -24,6 +22,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestUDPConn(t *testing.T) {
+	// cannot use nettest.TestConn because it is UDP is datagram-oriented, not stream-oriented
+	// and other part of the connection won't receive FIN packet.
 	t.Run("simple", func(t *testing.T) {
 		stcConn, customConn := testPipe(t)
 
@@ -137,11 +137,10 @@ func TestUDPConn(t *testing.T) {
 	})
 
 	t.Run("racy write", func(t *testing.T) {
-		l, stdConn, customConn, err := pipe()
+		stdConn, customConn, err := udp.Pipe()
 		if err != nil {
 			t.Fatalf("failed to create pipe: %v", err)
 		}
-		defer l.Close()
 
 		var wg sync.WaitGroup
 
@@ -237,54 +236,12 @@ func TestUDPConn(t *testing.T) {
 }
 
 func testPipe(t *testing.T) (net.Conn, net.Conn) {
-	l, stcConn, customConn, err := pipe()
+	stcConn, customConn, err := udp.Pipe()
 	if err != nil {
 		t.Fatalf("failed to create pipe: %v", err)
 	}
-	registerCleanup(t, stcConn, customConn, l)
+	registerCleanup(t, stcConn, customConn)
 	return stcConn, customConn
-}
-
-func pipe() (net.Listener, net.Conn, net.Conn, error) {
-	localhost := &net.UDPAddr{
-		IP:   net.IPv4(127, 0, 0, 1),
-		Port: 0, // let the system choose a free port
-	}
-	llc := &udp.ListenConfig{}
-	listener, err := llc.Listen(context.TODO(), localhost)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to listen UDP: %v", err)
-	}
-
-	ld := &platform.LocalDialer{}
-	stdConn, err := ld.DialUDP(context.TODO(), listener.Addr().(*net.UDPAddr).Port)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to dial UDP: %w", err)
-	}
-
-	handshake := "hello"
-	_, err = stdConn.Write([]byte(handshake))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to write to UDP connection: %w", err)
-	}
-
-	custom, err := listener.Accept()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to accept UDP connection: %w", err)
-	}
-
-	buf := make([]byte, len(handshake))
-	n, err := custom.Read(buf)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read from UDP connection: %w", err)
-	}
-
-	res := string(buf[:n])
-	if res != handshake {
-		return nil, nil, nil, fmt.Errorf("handshake failed, expected: %s, got: %s", handshake, res)
-	}
-
-	return listener, stdConn, custom, nil
 }
 
 // avoid stdConn to implement [io.WriterTo]
@@ -295,11 +252,8 @@ func copyBuffer(w io.Writer, r io.Reader) error {
 	return err
 }
 
-func registerCleanup(t *testing.T, stdConn, custom net.Conn, listener net.Listener) {
+func registerCleanup(t *testing.T, stdConn, custom net.Conn) {
 	t.Cleanup(func() {
-		if err := listener.Close(); err != nil {
-			t.Errorf("failed to close listener: %v", err)
-		}
 		if err := stdConn.Close(); err != nil {
 			t.Errorf("failed to close std conn: %v", err)
 		}

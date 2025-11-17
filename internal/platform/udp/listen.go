@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -24,26 +23,24 @@ const (
 
 // ListenConfig implements stream-oriented connection on the top of UDP.
 type ListenConfig struct {
-	// ListenConfig is a configuration for listening on a UDP address.
-	ListenConfig net.ListenConfig
-	// ConnBacklog is a maximum number of connections waiting for accepting.
-	// Default value is 128.
-	// If the backlog is exceeded, ErrListenQueueExceeded error will be returned.
+	// ConnBacklog is the maximum number of connections waiting to be accepted.
+	// The default value is 128.
+	// If the backlog is exceeded, [ErrListenQueueExceeded] will be returned.
 	ConnBacklog int
-	// ReadBufferSize is a size of a buffer for read packets on a single connection.
-	// If nothing is reading from the connection and buffer is full,
-	// packets will be dropped with ErrReadBufferExceeded error.
+	// ReadBufferSize is the size of the buffer for reading packets on a single connection.
+	// If nothing is reading from the connection and the buffer is full,
+	// packets will be dropped with [ErrReadBufferExceeded].
+	// This ensures that one blocked reader doesn't block accepting new connections
+	// or reading from other connections.
 	ReadBufferSize int
-	// Logger is used to log errors on listener.
+	// Logger is used to log errors on the listener.
 	// If nil, [slog.Default] will be used.
 	Logger *slog.Logger
 }
 
 // Listen creates a new UDP listener with the specified address.
-// The ctx argument is used while resolving the address on which to listen;
-// it does not affect the returned Listener.
-func (l ListenConfig) Listen(ctx context.Context, addr *net.UDPAddr) (net.Listener, error) {
-	conn, err := l.ListenConfig.ListenPacket(ctx, addr.Network(), addr.String())
+func (l ListenConfig) Listen(addr *net.UDPAddr) (net.Listener, error) {
+	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +95,7 @@ func (l *Listener) readLoop() {
 	defer close(l.readDone)
 
 	for {
-		buf := make([]byte, platform.MTU)
+		buf := make([]byte, platform.MTU) // TODO: use sync.Pool
 		n, addr, err := l.conn.ReadFrom(buf)
 		if err != nil {
 			l.readErr.Store(err)
