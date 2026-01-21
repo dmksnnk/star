@@ -29,7 +29,7 @@ type Registar interface {
 	Join(ctx context.Context, key auth.Key, streamer http3.HTTPStreamer, addrs AddrPair) error
 }
 
-// New creates a new API on top of the given service.
+// NewAPI creates a new API on top of the given service.
 func NewAPI(r Registar, caAuthority *Authority) *API {
 	return &API{
 		registar:    r,
@@ -104,10 +104,6 @@ func (a *API) Join(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func (a *API) Close() error {
-	return nil
 }
 
 func (a *API) validateHTTP3Settings(w http.ResponseWriter) bool {

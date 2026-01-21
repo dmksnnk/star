@@ -22,12 +22,6 @@ func NewServer(t *testing.T, secret []byte, reg registar.Registar) *http3test.Se
 
 	caAuthority := registar.NewAuthority(rootCA)
 	api := registar.NewAPI(reg, caAuthority)
-	t.Cleanup(func() {
-		if err := api.Close(); err != nil {
-			t.Errorf("API Close: %v", err)
-		}
-	})
-
 	router := registar.NewRouter(api, secret)
 
 	return http3test.NewTestServer(t, router)
