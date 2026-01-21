@@ -70,7 +70,9 @@ func Discover(t *testing.T, conn net.PacketConn, server netip.AddrPort) registar
 func NewClient(t *testing.T, tr *quic.Transport, srv *http3test.Server, secret []byte, key auth.Key) *registar.RegisteredClient {
 	t.Helper()
 
-	client, err := registar.NewClient(context.TODO(), tr, srv.TLSConfig(), srv.URL(), secret, key)
+	token := auth.NewToken(key, secret)
+
+	client, err := registar.RegisterClient(context.TODO(), tr, srv.TLSConfig(), srv.URL(), token)
 	if err != nil {
 		t.Fatalf("register client: %s", err)
 	}

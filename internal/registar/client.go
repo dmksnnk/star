@@ -27,7 +27,9 @@ import (
 // but they are not.
 var ErrDatagramsNotEnabled = errors.New("datagrams are not enabled")
 
-func NewClient(ctx context.Context, quicTransport *quic.Transport, tlsConf *tls.Config, base *url.URL, secret []byte, key auth.Key) (*RegisteredClient, error) {
+// RegisterClient registers a new client with the registar server and obtains a session certificate.
+// Client is only valid of a session.
+func RegisterClient(ctx context.Context, quicTransport *quic.Transport, tlsConf *tls.Config, base *url.URL, token auth.Token) (*RegisteredClient, error) {
 	quicConfig := &quic.Config{
 		EnableDatagrams: true,
 	}
@@ -85,7 +87,6 @@ func NewClient(ctx context.Context, quicTransport *quic.Transport, tlsConf *tls.
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	token := auth.NewToken(key, secret)
 	httpReq.Header.Set(headerToken, token.String())
 
 	httpResp, err := clientConn.RoundTrip(httpReq)
