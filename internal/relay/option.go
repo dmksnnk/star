@@ -30,10 +30,3 @@ func WithRouteTTL(ttl time.Duration) Option {
 		r.routes = NewTTLMap[netip.AddrPort, netip.AddrPort](ttl)
 	}
 }
-
-// WithRateLoggingInterval sets the interval for logging rate statistics.
-func WithRateLoggingInterval(interval time.Duration) Option {
-	return func(r *UDPRelay) {
-		r.rateLoggingInterval = interval
-	}
-}

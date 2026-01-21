@@ -150,7 +150,7 @@ func Test_ConnectP2P(t *testing.T) {
 }
 
 func Test_ConnectRelay(t *testing.T) {
-	relay, relayAddr := integrationtest.ServeRelay(t, relay.WithLogger(logger), relay.WithRateLoggingInterval(100*time.Millisecond))
+	relay, relayAddr := integrationtest.ServeRelay(t, relay.WithLogger(logger))
 	reg := registar.NewRegistar2(relayAddr, relay)
 	srv := integrationtest.NewServer(t, secret, reg)
 

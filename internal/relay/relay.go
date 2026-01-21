@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +18,13 @@ import (
 
 var errCancelled = errors.New("relay: cancelled")
 
+// Stats contains UDP relay statistics.
+type Stats struct {
+	BytesIn        uint64
+	BytesOut       uint64
+	DroppedPackets uint64
+}
+
 type UDPRelay struct {
 	bufPool sync.Pool
 	workers int
@@ -27,10 +33,10 @@ type UDPRelay struct {
 
 	done chan struct{}
 
-	logger              *slog.Logger
-	rateLoggingInterval time.Duration
-	bytesIn             atomic.Uint64
-	bytesOut            atomic.Uint64
+	logger         *slog.Logger
+	bytesIn        atomic.Uint64
+	bytesOut       atomic.Uint64
+	droppedPackets atomic.Uint64
 }
 
 type packet struct {
@@ -47,18 +53,15 @@ func NewUDPRelay(opts ...Option) *UDPRelay {
 				return &buf
 			},
 		},
-		routes:              NewTTLMap[netip.AddrPort, netip.AddrPort](30 * time.Minute),
-		done:                make(chan struct{}),
-		workers:             runtime.NumCPU(),
-		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-		rateLoggingInterval: 10 * time.Second,
+		routes:  NewTTLMap[netip.AddrPort, netip.AddrPort](30 * time.Minute),
+		done:    make(chan struct{}),
+		workers: runtime.NumCPU(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	for _, opt := range opts {
 		opt(&r)
 	}
-
-	go r.logStats()
 
 	return &r
 }
@@ -106,6 +109,15 @@ func (r *UDPRelay) AddRoute(a, b netip.AddrPort) {
 	r.routes.Set(b, a)
 }
 
+// Stats returns current relay statistics.
+func (r *UDPRelay) Stats() Stats {
+	return Stats{
+		BytesIn:        r.bytesIn.Load(),
+		BytesOut:       r.bytesOut.Load(),
+		DroppedPackets: r.droppedPackets.Load(),
+	}
+}
+
 // Close sends a signal to stop all relay operations.
 // It will stop reading new packets, but will process all packets already read.
 // For proper shutdown, ensure that all [UDPRelay.Serve] calls have returned after invoking Close.
@@ -142,6 +154,10 @@ func (r *UDPRelay) readPackets(conn *net.UDPConn, inbox chan<- packet) error {
 }
 
 func (r *UDPRelay) readPacketWithTimeout(conn *net.UDPConn, bufp *[]byte) (packet, error) {
+	defer func() {
+		_ = conn.SetDeadline(time.Time{}) // clear deadline
+	}()
+
 	for {
 		select {
 		case <-r.done:
@@ -158,8 +174,6 @@ func (r *UDPRelay) readPacketWithTimeout(conn *net.UDPConn, bufp *[]byte) (packe
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				continue
 			}
-
-			conn.SetDeadline(time.Time{}) // clear deadline
 
 			return packet{}, fmt.Errorf("read from udp: %w", err)
 		}
@@ -178,6 +192,7 @@ func (r *UDPRelay) writePacket(conn *net.UDPConn, pkt packet) error {
 	dst, ok := r.routes.Get(pkt.addr)
 	if !ok { // drop packet if no route
 		r.logger.Warn("dropping packet with no route", slog.String("addr", pkt.addr.String()), slog.Int("size", pkt.n))
+		r.droppedPackets.Add(1)
 		return nil
 	}
 
@@ -192,38 +207,4 @@ func (r *UDPRelay) writePacket(conn *net.UDPConn, pkt packet) error {
 	r.bytesOut.Add(uint64(n))
 
 	return nil
-}
-
-func (r *UDPRelay) logStats() error {
-	ticker := time.NewTicker(r.rateLoggingInterval)
-	defer ticker.Stop()
-
-	var lastIn, lastOut uint64
-	lastTime := time.Now()
-
-	for {
-		select {
-		case <-r.done:
-			return nil
-		case now := <-ticker.C:
-			interval := now.Sub(lastTime).Seconds()
-			lastTime = now
-
-			in := r.bytesIn.Load()
-			out := r.bytesOut.Load()
-
-			inRate := float64(in-lastIn) / interval / 1024
-			outRate := float64(out-lastOut) / interval / 1024
-
-			lastIn = in
-			lastOut = out
-
-			r.logger.Info("stats",
-				slog.Group("kibps",
-					slog.String("in", strconv.FormatFloat(inRate, 'f', 2, 64)),
-					slog.String("out", strconv.FormatFloat(outRate, 'f', 2, 64)),
-				),
-			)
-		}
-	}
 }
