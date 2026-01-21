@@ -107,7 +107,7 @@ func localUDPPipe(t *testing.T) (net.Conn, net.Conn) {
 	return c1, c2
 }
 
-func newTLSConfig(t *testing.T, ips ...net.IP) (*tls.Config, *tls.Config) {
+func newTLSConfig(t *testing.T, ips ...net.IP) (server *tls.Config, client *tls.Config) {
 	privkey, err := cert.NewPrivateKey()
 	if err != nil {
 		t.Fatal("create server private key:", err)

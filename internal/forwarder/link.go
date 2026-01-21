@@ -13,11 +13,9 @@ import (
 )
 
 func link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
-	var eg errgroup.Group
-	eg.Go(func() error {
-		// Close closes the send-direction of the stream.
-		// It does not close the receive-direction of the stream.
+	eg, ctx := errgroup.WithContext(ctx)
 
+	eg.Go(func() error {
 		buf := make([]byte, 1500)
 		for {
 			n, err := read(ctx, udpConn, buf)
