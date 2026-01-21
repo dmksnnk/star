@@ -72,6 +72,12 @@ func (l ListenConfig) Listen(addr *net.UDPAddr) (net.Listener, error) {
 	return lis, nil
 }
 
+// Listen is a convenience function to create a UDP listener with default configuration.
+// See [ListenConfig] for more details.
+func Listen(addr *net.UDPAddr) (net.Listener, error) {
+	return ListenConfig{}.Listen(addr)
+}
+
 // Listener listens for incoming packets.
 // Implements [net.Listener] interface
 type Listener struct {

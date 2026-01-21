@@ -22,6 +22,9 @@ func Pipe() (net.Conn, net.Conn, error) {
 		return nil, nil, fmt.Errorf("failed to dial UDP: %w", err)
 	}
 
+	// perform a handshake to establish the connection, because UDP is connectionless
+	// and listener does not know about stdConn until data is sent
+
 	handshake := "hello"
 	_, err = stdConn.Write([]byte(handshake))
 	if err != nil {
