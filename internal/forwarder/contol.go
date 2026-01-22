@@ -3,9 +3,9 @@ package forwarder
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 
-	"github.com/dmksnnk/star/internal/errcode"
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/p2p"
 	"github.com/quic-go/quic-go"
@@ -18,6 +18,8 @@ type ControlListener struct {
 	ctrlStream *http3.RequestStream
 	conns      chan *quic.Conn
 }
+
+var errcodeClosed = quic.StreamErrorCode(0x1003)
 
 func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
 	connector := p2p.NewConnector(tr, tlsConf)
@@ -64,7 +66,22 @@ func (l *ControlListener) Accept(ctx context.Context) (*quic.Conn, error) {
 }
 
 func (l *ControlListener) Close() error {
-	l.ctrlStream.CancelRead(errcode.PeerClosed)
+	l.ctrlStream.CancelRead(errcodeClosed)
 
-	return l.eg.Wait()
+	if err := l.eg.Wait(); err != nil {
+		if isLocalCloseError(err) {
+			return nil
+		}
+
+		return fmt.Errorf("control listener error: %w", err)
+	}
+
+	return nil
+}
+
+func isLocalCloseError(err error) bool {
+	var h3Err *http3.Error
+	return errors.As(err, &h3Err) &&
+		h3Err.ErrorCode == http3.ErrCode(errcodeClosed) &&
+		!h3Err.Remote
 }
