@@ -62,7 +62,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	if err != nil {
 		return nil, fmt.Errorf("listen early: %w", err)
 	}
-	defer earlyListener.Close()
+	defer earlyListener.Close() // OK to close, as it does not close active connections
 
 	eg, ctx := errgroup.WithContext(ctx)
 

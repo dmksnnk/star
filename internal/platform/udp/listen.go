@@ -39,6 +39,12 @@ type ListenConfig struct {
 }
 
 // Listen creates a new UDP listener with the specified address.
+//
+// If the IP field of addr is nil or an unspecified IP address,
+// Listen listens on all available IP addresses of the local system
+// except multicast IP addresses.
+// If the Port field of addr is 0, a port number is automatically
+// chosen.
 func (l ListenConfig) Listen(addr *net.UDPAddr) (net.Listener, error) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {

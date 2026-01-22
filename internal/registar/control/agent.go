@@ -21,6 +21,7 @@ func NewAgent() *Agent {
 }
 
 // OnConnectTo registers a callback on command to connect to another peer.
+// The callback should return true if connection attempt was started successfully.
 func (a *Agent) OnConnectTo(f func(ctx context.Context, cmd ConnectCommand) (bool, error)) {
 	a.mux.HandleFunc("POST /connect-to", func(w http.ResponseWriter, r *http.Request) {
 		var cmd ConnectCommand
