@@ -1,6 +1,7 @@
 package discovery_test
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"testing"
@@ -57,7 +58,7 @@ func TestBindLoopback(t *testing.T) {
 	// Client side socket
 	clientConn := integrationtest.NewLocalUDPConn(t)
 
-	publicAddr, err := discovery.Bind(clientConn, server)
+	publicAddr, err := discovery.Bind(context.Background(), clientConn, server)
 	if err != nil {
 		t.Fatalf("Bind error: %v", err)
 	}

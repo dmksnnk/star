@@ -56,7 +56,7 @@ func NewLocalQUICTransport(t *testing.T) *quic.Transport {
 func Discover(t *testing.T, conn net.PacketConn, server netip.AddrPort) registar.AddrPair {
 	t.Helper()
 
-	public, err := discovery.Bind(conn, server)
+	public, err := discovery.Bind(context.Background(), conn, server)
 	if err != nil {
 		t.Fatalf("discover addrs: %s", err)
 	}

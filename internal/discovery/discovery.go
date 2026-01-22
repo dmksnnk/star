@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding"
 	"encoding/binary"
@@ -114,7 +115,7 @@ func (r *Response) UnmarshalBinary(p []byte) error {
 
 // Bind sends a binding request to the given server and returns the public
 // address as observed by the server.
-func Bind(conn net.PacketConn, server netip.AddrPort) (netip.AddrPort, error) {
+func Bind(ctx context.Context, conn net.PacketConn, server netip.AddrPort) (netip.AddrPort, error) {
 	req, err := NewRequest()
 	if err != nil {
 		return netip.AddrPort{}, err
@@ -126,6 +127,10 @@ func Bind(conn net.PacketConn, server netip.AddrPort) (netip.AddrPort, error) {
 
 	buf := make([]byte, 1024)
 	for {
+		if err := ctx.Err(); err != nil {
+			return netip.AddrPort{}, err
+		}
+
 		if _, err := conn.WriteTo(pkt, net.UDPAddrFromAddrPort(server)); err != nil {
 			return netip.AddrPort{}, err
 		}
