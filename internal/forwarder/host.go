@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"sync"
 
 	"github.com/dmksnnk/star/internal/discovery"
 	"github.com/dmksnnk/star/internal/registar"
@@ -33,7 +34,7 @@ func (h HostConfig) Register(
 	baseURL *url.URL,
 	publicAddr netip.AddrPort,
 	token auth.Token,
-) (Host, error) {
+) (*Host, error) {
 	logger := h.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -42,7 +43,7 @@ func (h HostConfig) Register(
 
 	client, err := registar.RegisterClient(ctx, tr, h.TLSConfig, baseURL, token)
 	if err != nil {
-		return Host{}, fmt.Errorf("register registar client: %w", err)
+		return nil, fmt.Errorf("register registar client: %w", err)
 	}
 
 	hostAddrs := registar.AddrPair{
@@ -52,12 +53,13 @@ func (h HostConfig) Register(
 
 	stream, err := client.Host(ctx, hostAddrs)
 	if err != nil {
-		return Host{}, fmt.Errorf("create host stream: %w", err)
+		return nil, fmt.Errorf("create host stream: %w", err)
 	}
 
 	controlListener := ListenControl(stream, tr, client.TLSConfig())
 
-	return Host{
+	return &Host{
+		transport:   tr,
 		client:      client,
 		control:     controlListener,
 		logger:      logger,
@@ -66,17 +68,16 @@ func (h HostConfig) Register(
 }
 
 type Host struct {
-	client      *registar.RegisteredClient
-	control     *ControlListener
+	transport *quic.Transport
+	client    *registar.RegisteredClient
+	control   *ControlListener
+	wg        sync.WaitGroup
+
 	logger      *slog.Logger
 	errHandlers []func(error)
 }
 
-func (h Host) Run(ctx context.Context, gamePort int) error {
-	defer func() {
-		h.logger.Debug("exited")
-	}()
-
+func (h *Host) Run(ctx context.Context, gamePort int) error {
 	for {
 		peerConn, err := h.control.Accept(ctx)
 		if err != nil {
@@ -89,8 +90,9 @@ func (h Host) Run(ctx context.Context, gamePort int) error {
 
 		h.logger.Debug("accepted peer connection", "addr", peerConn.RemoteAddr())
 
-		// TODO: wait for all links to finish on context cancellation
+		h.wg.Add(1)
 		go func() {
+			defer h.wg.Done()
 			defer peerConn.CloseWithError(0, "closing connection")
 			defer h.logger.Debug("link finished")
 
@@ -102,13 +104,16 @@ func (h Host) Run(ctx context.Context, gamePort int) error {
 	}
 }
 
-func (h Host) Close() error {
+func (h *Host) Close() error {
 	h.control.Close()
+	h.wg.Wait()
+
 	// must close client, otherwise it holds connection to the server and sever cannot shut down
-	return h.client.Close()
+	h.client.Close()
+	return h.transport.Close()
 }
 
-func (h Host) handleError(err error) {
+func (h *Host) handleError(err error) {
 	for _, handler := range h.errHandlers {
 		handler(err)
 	}
@@ -121,6 +126,7 @@ func linkWithHost(ctx context.Context, conn *quic.Conn, gamePort int) error {
 		conn.CloseWithError(errcodeFailedToConnect, "dial game UDP failed")
 		return fmt.Errorf("dial game UDP: %w", err)
 	}
+	defer gameConn.Close()
 
 	if err := link(ctx, gameConn, conn); err != nil {
 		conn.CloseWithError(errcodeLinkFailed, "link with game failed")

@@ -27,7 +27,7 @@ var (
 
 func TestRunHost(t *testing.T) {
 	relay, relayAddr := integrationtest.ServeRelay(t)
-	reg := registar.NewRegistar(relayAddr, relay)
+	reg := registar.NewRegistar2(relayAddr, relay)
 	srv := integrationtest.NewServer(t, secret, reg)
 	discoverySrvAddr := integrationtest.ServeDiscovery(t)
 
@@ -154,7 +154,6 @@ func TestRunHost(t *testing.T) {
 	if err := eg.Wait(); err != nil {
 		t.Fatalf("%s", err)
 	}
-	slog.Info("test completed successfully")
 }
 
 func runGameServer(t *testing.T) int {
@@ -186,9 +185,6 @@ func runGameServer(t *testing.T) int {
 	})
 
 	t.Cleanup(func() {
-		defer func() {
-			fmt.Println("game server cleanup done")
-		}()
 		if err := conn.Close(); err != nil {
 			t.Errorf("close game server: %v", err)
 		}

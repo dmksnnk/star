@@ -25,7 +25,7 @@ func (p PeerConfig) Register(
 	baseURL *url.URL,
 	publicAddr netip.AddrPort,
 	token auth.Token,
-) (Peer, error) {
+) (*Peer, error) {
 	logger := p.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -34,7 +34,7 @@ func (p PeerConfig) Register(
 
 	client, err := registar.RegisterClient(ctx, tr, p.TLSConfig, baseURL, token)
 	if err != nil {
-		return Peer{}, fmt.Errorf("register registar client: %w", err)
+		return nil, fmt.Errorf("register registar client: %w", err)
 	}
 
 	peerAddrs := registar.AddrPair{
@@ -44,22 +44,24 @@ func (p PeerConfig) Register(
 
 	controlStream, err := client.Join(ctx, peerAddrs)
 	if err != nil {
-		return Peer{}, fmt.Errorf("create peer stream: %w", err)
+		return nil, fmt.Errorf("create peer stream: %w", err)
 	}
 
 	controlListener := ListenControl(controlStream, tr, client.TLSConfig())
 
-	return Peer{
-		client:  client,
-		control: controlListener,
-		logger:  logger,
+	return &Peer{
+		transport: tr,
+		client:    client,
+		control:   controlListener,
+		logger:    logger,
 	}, nil
 }
 
 type Peer struct {
-	client  *registar.RegisteredClient
-	control *ControlListener
-	logger  *slog.Logger
+	transport *quic.Transport
+	client    *registar.RegisteredClient
+	control   *ControlListener
+	logger    *slog.Logger
 }
 
 func (p *Peer) AcceptAndLink(ctx context.Context, l net.Listener) error { // TODO: handle reconnects
@@ -86,8 +88,10 @@ func (p *Peer) AcceptAndLink(ctx context.Context, l net.Listener) error { // TOD
 	return hostConn.CloseWithError(0, "peer exited")
 }
 
-func (p Peer) Close() error {
+func (p *Peer) Close() error {
 	p.control.Close()
 	// must close client, otherwise it holds connection to the server and sever cannot shut down
-	return p.client.Close()
+	p.client.Close()
+	// close transport last, otherwise it hangs
+	return p.transport.Close()
 }
