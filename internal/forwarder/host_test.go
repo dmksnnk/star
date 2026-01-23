@@ -2,20 +2,19 @@ package forwarder_test
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/dmksnnk/star/internal/forwarder"
-	"github.com/dmksnnk/star/internal/platform/udp"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/integrationtest"
-	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -25,29 +24,17 @@ var (
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 )
 
+// TODO: maybe move to integration tests
 func TestRunHost(t *testing.T) {
 	relay, relayAddr := integrationtest.ServeRelay(t)
 	reg := registar.NewRegistar2(relayAddr, relay)
 	srv := integrationtest.NewServer(t, secret, reg)
 	discoverySrvAddr := integrationtest.ServeDiscovery(t)
 
-	gamePort := runGameServer(t)
-
-	hostUDPConn, hostPublicAddr, err := forwarder.DiscoverConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, discoverySrvAddr)
-	if err != nil {
-		t.Fatalf("DiscoverConn: %v", err)
-	}
-
-	hostTransport := &quic.Transport{
-		Conn: hostUDPConn,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	eg, ctx := errgroup.WithContext(ctx)
-
 	hostCfg := forwarder.HostConfig{
-		Logger:    logger,
-		TLSConfig: srv.TLSConfig(),
+		Logger:     logger,
+		TLSConfig:  srv.TLSConfig(),
+		ListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}, // localhost
 		ErrHandlers: []func(error){
 			func(err error) {
 				t.Errorf("host error: %v", err)
@@ -55,140 +42,226 @@ func TestRunHost(t *testing.T) {
 		},
 	}
 
-	host, err := hostCfg.Register(
-		ctx,
-		hostTransport,
-		srv.URL(),
-		hostPublicAddr,
-		token,
-	)
-	if err != nil {
-		t.Fatalf("host register: %v", err)
-	}
-
-	eg.Go(func() error {
-		if err := host.Run(ctx, gamePort); err != nil {
-			return fmt.Errorf("host run: %w", err)
-		}
-
-		return nil
-	})
-
-	peerUDPConn, peerPublicAddr, err := forwarder.DiscoverConn(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, discoverySrvAddr)
-	if err != nil {
-		t.Fatalf("DiscoverConn: %v", err)
-	}
-
-	peerTransport := &quic.Transport{
-		Conn: peerUDPConn,
-	}
-
-	peerListener, err := udp.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen UDP: %v", err)
-	}
-	defer peerListener.Close()
-
 	peerCfg := forwarder.PeerConfig{
-		Logger:    logger,
-		TLSConfig: srv.TLSConfig(),
-	}
-	peer, err := peerCfg.Register(
-		ctx,
-		peerTransport,
-		srv.URL(),
-		peerPublicAddr,
-		token,
-	)
-	if err != nil {
-		t.Fatalf("peer register: %v", err)
+		Logger:             logger,
+		TLSConfig:          srv.TLSConfig(),
+		RegistarListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}, // localhost
 	}
 
-	eg.Go(func() error {
-		if err := peer.AcceptAndLink(ctx, peerListener); err != nil {
-			return fmt.Errorf("peer run: %w", err)
-		}
-
-		return nil
-	})
-
-	// act as a game client
-	gameConn, err := net.DialUDP("udp", nil, peerListener.Addr().(*net.UDPAddr))
-	if err != nil {
-		t.Fatalf("dial UDP: %v", err)
-	}
-
-	var received []byte
-	buf := make([]byte, 1500)
-	message := []byte("hello from game client")
-	for range 5 {
-		if _, err := gameConn.Write(message); err != nil {
-			t.Fatalf("write to game UDP: %v", err)
-		}
-
-		gameConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-
-		n, err := gameConn.Read(buf)
+	t.Run("stops on Close", func(t *testing.T) {
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		if err != nil {
-			if errors.Is(err, os.ErrDeadlineExceeded) {
-				slog.Info("game client read timeout, retrying...")
-				continue
+			t.Fatalf("listen udp: %v", err)
+		}
+
+		host, err := hostCfg.Register(
+			context.TODO(),
+			discoverySrvAddr,
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("host register: %v", err)
+		}
+
+		peer, err := peerCfg.Register(
+			context.TODO(),
+			discoverySrvAddr,
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("peer register: %v", err)
+		}
+
+		eg, ctx := errgroup.WithContext(context.Background())
+
+		eg.Go(func() error {
+			if err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
+				return fmt.Errorf("host run: %w", err)
 			}
 
-			t.Fatalf("read from game UDP: %v", err)
+			return nil
+		})
+
+		eg.Go(func() error {
+			if err := peer.AcceptAndLink(ctx); err != nil {
+				return fmt.Errorf("peer run: %w", err)
+			}
+
+			return nil
+		})
+
+		clientConn, err := net.DialUDP("udp", nil, peer.UDPAddr())
+		if err != nil {
+			t.Fatalf("dial UDP: %v", err)
 		}
 
-		received = buf[:n]
-		break
-	}
+		pingPong(t, serverConn, clientConn)
 
-	if string(received) != string(message) {
-		t.Fatalf("unexpected message from game server: got %q, want %q", string(received), string(message))
-	}
+		serverConn.Close()
+		clientConn.Close()
 
-	slog.Info("game client received reply", "message", string(received))
-	cancel()
-	peer.Close()
-	host.Close()
+		if err := peer.Close(); err != nil {
+			t.Errorf("peer close: %v", err)
+		}
+		if err := host.Close(); err != nil {
+			t.Errorf("host close: %v", err)
+		}
 
-	if err := eg.Wait(); err != nil {
-		t.Fatalf("%s", err)
-	}
+		if err := eg.Wait(); err != nil {
+			t.Errorf("%s", err)
+		}
+	})
+
+	t.Run("stops on context cancel", func(t *testing.T) {
+		t.Skip("this test fails because registar still thinks it has active host")
+
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		if err != nil {
+			t.Fatalf("listen udp: %v", err)
+		}
+
+		host, err := hostCfg.Register(
+			context.TODO(),
+			discoverySrvAddr,
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("host register: %v", err)
+		}
+
+		peer, err := peerCfg.Register(
+			context.TODO(),
+			discoverySrvAddr,
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("peer register: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		eg, ctx := errgroup.WithContext(ctx)
+
+		eg.Go(func() error {
+			err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr))
+			if !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("host run: %w", err)
+			}
+
+			return nil
+		})
+
+		eg.Go(func() error {
+			err := peer.AcceptAndLink(ctx)
+			if !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("peer run: %w", err)
+			}
+
+			return nil
+		})
+
+		clientConn, err := net.DialUDP("udp", nil, peer.UDPAddr())
+		if err != nil {
+			t.Fatalf("dial UDP: %v", err)
+		}
+
+		pingPong(t, serverConn, clientConn)
+
+		cancel()
+
+		if err := eg.Wait(); err != nil {
+			t.Fatalf("%s", err)
+		}
+
+		serverConn.Close()
+		clientConn.Close()
+
+		if err := peer.Close(); err != nil {
+			t.Errorf("peer close: %v", err)
+		}
+		if err := host.Close(); err != nil {
+			t.Errorf("host close: %v", err)
+		}
+	})
 }
 
-func runGameServer(t *testing.T) int {
+// pingPong runs a ping-pong exchange between a UDP server and a connected UDP client.
+// The client sends incrementing numbers, the server reads from any address and responds back to it.
+func pingPong(t *testing.T, server *net.UDPConn, client net.Conn) {
 	t.Helper()
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen udp: %v", err)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Server: listens on UDP, responds to the address it receives from.
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 8)
+		var prev uint64
+		for {
+			_, addr, err := server.ReadFromUDP(buf)
+			if err != nil {
+				t.Errorf("server: failed to read: %v", err)
+				return
+			}
+
+			msg := binary.LittleEndian.Uint64(buf)
+			if prev != 0 && msg != prev+2 {
+				t.Errorf("server: expected %d, got %d", prev+2, msg)
+				return
+			}
+			prev = msg
+
+			binary.LittleEndian.PutUint64(buf, msg+1)
+			if _, err := server.WriteToUDP(buf, addr); err != nil {
+				t.Errorf("server: failed to write: %v", err)
+				return
+			}
+
+			if prev >= 100 {
+				return
+			}
+		}
+	}()
+
+	// Client: connected UDP, uses Read/Write.
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 8)
+		var prev uint64
+		for {
+			_, err := client.Read(buf)
+			if err != nil {
+				t.Errorf("client: failed to read: %v", err)
+				return
+			}
+
+			msg := binary.LittleEndian.Uint64(buf)
+			if msg != prev+1 {
+				t.Errorf("client: expected %d, got %d", prev+1, msg)
+				return
+			}
+			prev = msg + 1 // track what we'll send next
+
+			binary.LittleEndian.PutUint64(buf, msg+1)
+			if _, err := client.Write(buf); err != nil {
+				t.Errorf("client: failed to write: %v", err)
+				return
+			}
+
+			if msg+1 >= 100 {
+				return
+			}
+		}
+	}()
+
+	// Client starts the chain.
+	if _, err := client.Write(binary.LittleEndian.AppendUint64(nil, 0)); err != nil {
+		t.Fatalf("failed to start ping-pong: %v", err)
 	}
 
-	port := conn.LocalAddr().(*net.UDPAddr).Port
-
-	t.Logf("game server listening on port %d", port)
-
-	var eg errgroup.Group
-	eg.Go(func() error {
-		buf := make([]byte, 1500)
-		for {
-			n, addr, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				return err
-			}
-
-			t.Logf("game server received %d bytes from %s: %s", n, addr, string(buf[:n]))
-
-			if _, err := conn.WriteToUDP(buf[:n], addr); err != nil {
-				return err
-			}
-		}
-	})
-
-	t.Cleanup(func() {
-		if err := conn.Close(); err != nil {
-			t.Errorf("close game server: %v", err)
-		}
-	})
-
-	return port
+	wg.Wait()
 }

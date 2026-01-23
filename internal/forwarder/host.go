@@ -23,23 +23,43 @@ var (
 )
 
 type HostConfig struct {
-	Logger      *slog.Logger
-	TLSConfig   *tls.Config
+	// Logger specifies an optional logger.
+	// If nil, [slog.Default] will be used.
+	Logger *slog.Logger
+	// TLS config for calling registar.
+	// For tests it should should trust registar's cert
+	TLSConfig *tls.Config
+	// ListenAddr specifies the local UDP address to listen on for incoming QUIC connections.
+	// If the IP field is nil or an unspecified IP address,
+	// HostConfig listens on all available IP addresses of the local system
+	// except multicast IP addresses.
+	// If the Port field is 0, a port number is automatically
+	// chosen.
+	ListenAddr *net.UDPAddr
+	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
+	// before it is used.
+	ConfigureTransport func(*quic.Transport)
+	// ErrHandlers are called when an error occurs when handling links.
 	ErrHandlers []func(error)
 }
 
 func (h HostConfig) Register(
 	ctx context.Context,
-	tr *quic.Transport, // transport with discoverder connection
+	discoverySrv netip.AddrPort,
 	baseURL *url.URL,
-	publicAddr netip.AddrPort,
 	token auth.Token,
 ) (*Host, error) {
-	logger := h.Logger
-	if logger == nil {
-		logger = slog.Default()
+	conn, publicAddr, err := DiscoverConn(ctx, h.ListenAddr, discoverySrv)
+	if err != nil {
+		return nil, fmt.Errorf("discover connection: %w", err)
 	}
-	logger = logger.With("role", "host")
+
+	tr := &quic.Transport{
+		Conn: conn,
+	}
+	if h.ConfigureTransport != nil {
+		h.ConfigureTransport(tr)
+	}
 
 	client, err := registar.RegisterClient(ctx, tr, h.TLSConfig, baseURL, token)
 	if err != nil {
@@ -50,18 +70,21 @@ func (h HostConfig) Register(
 		Public:  publicAddr,
 		Private: tr.Conn.LocalAddr().(*net.UDPAddr).AddrPort(),
 	}
-
 	stream, err := client.Host(ctx, hostAddrs)
 	if err != nil {
 		return nil, fmt.Errorf("create host stream: %w", err)
 	}
 
-	controlListener := ListenControl(stream, tr, client.TLSConfig())
+	logger := h.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("role", "host")
 
 	return &Host{
 		transport:   tr,
 		client:      client,
-		control:     controlListener,
+		control:     ListenControl(stream, tr, client.TLSConfig()),
 		logger:      logger,
 		errHandlers: h.ErrHandlers,
 	}, nil
@@ -77,11 +100,11 @@ type Host struct {
 	errHandlers []func(error)
 }
 
-func (h *Host) Run(ctx context.Context, gamePort int) error {
+func (h *Host) Run(ctx context.Context, gameAddr *net.UDPAddr) error {
 	for {
 		peerConn, err := h.control.Accept(ctx)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, errControlListenerClosed) {
 				return nil
 			}
 
@@ -94,10 +117,18 @@ func (h *Host) Run(ctx context.Context, gamePort int) error {
 		go func() {
 			defer h.wg.Done()
 			defer peerConn.CloseWithError(0, "closing connection")
-			defer h.logger.Debug("link finished")
+			defer h.logger.Debug("link finished", "addr", peerConn.RemoteAddr())
 
-			if err := linkWithHost(ctx, peerConn, gamePort); err != nil {
-				h.logger.Error("link with host failed", "error", err)
+			if err := linkWithHost(ctx, peerConn, gameAddr); err != nil {
+				// Close() called
+				if errors.Is(err, quic.ErrTransportClosed) {
+					return
+				}
+				// context cancelled
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+
 				h.handleError(err)
 			}
 		}()
@@ -105,12 +136,17 @@ func (h *Host) Run(ctx context.Context, gamePort int) error {
 }
 
 func (h *Host) Close() error {
-	h.control.Close()
+	err := errors.Join(
+		h.control.Close(),
+		// must close client, otherwise it holds connection to the server and sever cannot shut down
+		h.client.Close(),
+		// close transport last, otherwise it hangs waiting for client connection
+		h.transport.Close(),
+	)
+
 	h.wg.Wait()
 
-	// must close client, otherwise it holds connection to the server and sever cannot shut down
-	h.client.Close()
-	return h.transport.Close()
+	return err
 }
 
 func (h *Host) handleError(err error) {
@@ -119,9 +155,9 @@ func (h *Host) handleError(err error) {
 	}
 }
 
-// link links incoming QUIC connections from peers to the local game UDP port.
-func linkWithHost(ctx context.Context, conn *quic.Conn, gamePort int) error {
-	gameConn, err := net.DialUDP("udp", nil, &net.UDPAddr{Port: gamePort})
+// linkWithHost links incoming QUIC connections from peers to the local UDP game.
+func linkWithHost(ctx context.Context, conn *quic.Conn, gameAddr *net.UDPAddr) error {
+	gameConn, err := net.DialUDP("udp", nil, gameAddr)
 	if err != nil {
 		conn.CloseWithError(errcodeFailedToConnect, "dial game UDP failed")
 		return fmt.Errorf("dial game UDP: %w", err)
@@ -137,13 +173,13 @@ func linkWithHost(ctx context.Context, conn *quic.Conn, gamePort int) error {
 }
 
 // DiscoverConn creates a UDP connection and discovers its public address using the discovery server.
-func DiscoverConn(addr *net.UDPAddr, discoverySrv netip.AddrPort) (*net.UDPConn, netip.AddrPort, error) {
+func DiscoverConn(ctx context.Context, addr *net.UDPAddr, discoverySrv netip.AddrPort) (*net.UDPConn, netip.AddrPort, error) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, netip.AddrPort{}, fmt.Errorf("listen UDP: %w", err)
 	}
 
-	publicAddr, err := discovery.Bind(conn, discoverySrv)
+	publicAddr, err := discovery.Bind(ctx, conn, discoverySrv)
 	if err != nil {
 		return nil, netip.AddrPort{}, fmt.Errorf("discovery public address: %w", err)
 	}
