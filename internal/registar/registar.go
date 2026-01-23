@@ -27,6 +27,9 @@ type Registar2 struct {
 }
 
 // TODO: implement host removal on host disconnect
+// TODO: implement removeval of session cert on host disconnect
+// TODO: implement of removal of relay route on peer and host disconnect -> not need for TTLs in relay
+// TODO: implement shutdown of registar, should close all connections
 
 var _ Registar = (*Registar2)(nil)
 

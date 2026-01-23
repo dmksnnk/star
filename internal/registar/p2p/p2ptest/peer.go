@@ -62,6 +62,8 @@ func main() {
 	}
 }
 
+// FIXME: update test, add instructions how to run it
+
 func runClient(stream http3platform.Stream) {
 	want := make([]byte, 1<<20)
 	rand.Read(want)

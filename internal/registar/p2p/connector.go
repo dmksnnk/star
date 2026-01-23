@@ -123,7 +123,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	publicReqCtx, publicReqCancel := context.WithCancel(ctx)
 	defer publicReqCancel()
 	eg.Go(func() error {
-defer close(publicDialled)
+		defer close(publicDialled)
 
 		for {
 			conn, err := c.dial(publicReqCtx, public)

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -101,30 +102,35 @@ func (a *API) Join(w http.ResponseWriter, r *http.Request) {
 
 	streamer := w.(http3.HTTPStreamer)
 	if err := a.registar.Join(r.Context(), key, streamer, addrs); err != nil {
+		if errors.Is(err, ErrHostNotFound) { // TODO: test me
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
-func (a *API) validateHTTP3Settings(w http.ResponseWriter) bool {
-	conn := w.(http3.Hijacker).Connection()
-	// wait for the client's SETTINGS
-	select {
-	case <-conn.ReceivedSettings():
-	case <-time.After(10 * time.Second):
-		// didn't receive SETTINGS within 10 seconds
-		http.Error(w, "timeout waiting for client's SETTINGS", http.StatusRequestTimeout)
-		return false
-	}
+// func (a *API) validateHTTP3Settings(w http.ResponseWriter) bool {
+// 	conn := w.(http3.Hijacker).Connection()
+// 	// wait for the client's SETTINGS
+// 	select {
+// 	case <-conn.ReceivedSettings():
+// 	case <-time.After(10 * time.Second):
+// 		// didn't receive SETTINGS within 10 seconds
+// 		http.Error(w, "timeout waiting for client's SETTINGS", http.StatusRequestTimeout)
+// 		return false
+// 	}
 
-	settings := conn.Settings()
-	if !settings.EnableDatagrams {
-		http.Error(w, "datagrams are not enabled", http.StatusBadRequest)
-		return false
-	}
+// 	settings := conn.Settings()
+// 	if !settings.EnableDatagrams {
+// 		http.Error(w, "datagrams are not enabled", http.StatusBadRequest)
+// 		return false
+// 	}
 
-	return true
-}
+// 	return true
+// }
 
 // NewServer creates a new HTTP/3 server.
 func NewServer(addr string, handler http.Handler, tlsConf *tls.Config) *http3.Server {
