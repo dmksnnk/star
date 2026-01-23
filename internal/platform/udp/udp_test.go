@@ -25,11 +25,11 @@ func TestUDPConn(t *testing.T) {
 	// cannot use nettest.TestConn because it is UDP is datagram-oriented, not stream-oriented
 	// and other part of the connection won't receive FIN packet.
 	t.Run("simple", func(t *testing.T) {
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 
 		for i := range 10 {
 			msg := []byte("hello " + strconv.Itoa(i))
-			_, err := stcConn.Write(msg)
+			_, err := stdConn.Write(msg)
 			if err != nil {
 				t.Fatalf("failed to write to c1: %v", err)
 			}
@@ -46,7 +46,7 @@ func TestUDPConn(t *testing.T) {
 	})
 
 	t.Run("ping pong", func(t *testing.T) {
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 		var wg sync.WaitGroup
 		var start uint64 = 0
 
@@ -81,7 +81,7 @@ func TestUDPConn(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			pingPonger(stcConn)
+			pingPonger(stdConn)
 		}()
 		go func() {
 			defer wg.Done()
@@ -89,7 +89,7 @@ func TestUDPConn(t *testing.T) {
 		}()
 
 		// start chain
-		if _, err := stcConn.Write(binary.LittleEndian.AppendUint64(nil, start)); err != nil {
+		if _, err := stdConn.Write(binary.LittleEndian.AppendUint64(nil, start)); err != nil {
 			t.Fatalf("failed to write: %v", err)
 		}
 
@@ -99,14 +99,14 @@ func TestUDPConn(t *testing.T) {
 	t.Run("racy read", func(t *testing.T) {
 		data := make([]byte, 1<<20)
 		rand.Read(data)
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 
 		var wg sync.WaitGroup
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := copyBuffer(stcConn, bytes.NewReader(data)); err != nil {
+			if err := copyBuffer(stdConn, bytes.NewReader(data)); err != nil {
 				t.Errorf("failed to write to stcConn: %v", err)
 			}
 		}()

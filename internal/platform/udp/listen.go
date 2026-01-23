@@ -45,7 +45,7 @@ type ListenConfig struct {
 // except multicast IP addresses.
 // If the Port field of addr is 0, a port number is automatically
 // chosen.
-func (l ListenConfig) Listen(addr *net.UDPAddr) (net.Listener, error) {
+func (l ListenConfig) Listen(addr *net.UDPAddr) (*Listener, error) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
@@ -80,19 +80,19 @@ func (l ListenConfig) Listen(addr *net.UDPAddr) (net.Listener, error) {
 
 // Listen is a convenience function to create a UDP listener with default configuration.
 // See [ListenConfig] for more details.
-func Listen(addr *net.UDPAddr) (net.Listener, error) {
+func Listen(addr *net.UDPAddr) (*Listener, error) {
 	return ListenConfig{}.Listen(addr)
 }
 
 // Listener listens for incoming packets.
 // Implements [net.Listener] interface
 type Listener struct {
-	conn        net.PacketConn
+	conn        *net.UDPConn
 	acceptQueue chan *Conn
 	done        chan struct{}
 
 	readBufferSize int
-	readDone       chan struct{}
+	readDone       chan struct{} // closed when readLoop exits with error
 	readErr        atomic.Value
 
 	conns    map[string]*Conn
@@ -174,6 +174,7 @@ func (l *Listener) dispatch(addr net.Addr, packet []byte) error {
 }
 
 // Accept waits for and returns the next connection to the listener.
+// Returns [ErrClosedListener] when listener is closed.
 func (l *Listener) Accept() (net.Conn, error) {
 	select {
 	case conn := <-l.acceptQueue:
@@ -188,6 +189,11 @@ func (l *Listener) Accept() (net.Conn, error) {
 // Addr returns the listener's network address.
 func (l *Listener) Addr() net.Addr {
 	return l.conn.LocalAddr()
+}
+
+// UDPAddr returns the listener's network address as *net.UDPAddr.
+func (l *Listener) UDPAddr() *net.UDPAddr {
+	return l.conn.LocalAddr().(*net.UDPAddr)
 }
 
 // Close closes the listener.
