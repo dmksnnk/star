@@ -20,10 +20,6 @@ func link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
 		for {
 			n, err := read(ctx, udpConn, buf)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-
 				return fmt.Errorf("read from udp conn: %w", err)
 			}
 
@@ -37,10 +33,6 @@ func link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
 		for {
 			dg, err := quicConn.ReceiveDatagram(ctx)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-
 				return fmt.Errorf("receive datagram: %w", err)
 			}
 

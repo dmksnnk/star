@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -50,7 +51,12 @@ func TestLink(t *testing.T) {
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		return link(ctx, udpSrv, quicSrv)
+		err := link(ctx, udpSrv, quicSrv)
+		if !errors.Is(err, context.Canceled) { // expecting context canceled error
+			return fmt.Errorf("link udpSrv and quicSrv: %w", err)
+		}
+
+		return nil
 	})
 
 	if _, err := udpClient.Write([]byte("hello")); err != nil {
