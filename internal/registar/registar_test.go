@@ -17,10 +17,12 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
-	key := auth.NewKey()
-	secret := []byte("secret")
+var (
+	secret = []byte("secret")
+	key    = auth.NewKey()
+)
 
+func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 	relay, relayAddr := integrationtest.ServeRelay(t)
 
 	reg := registar.NewRegistar2(relayAddr, relay)
@@ -85,9 +87,6 @@ func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 }
 
 func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
-	key := auth.NewKey()
-	secret := []byte("secret")
-
 	relay, relayAddr := integrationtest.ServeRelay(t)
 
 	reg := registar.NewRegistar2(relayAddr, relay)
