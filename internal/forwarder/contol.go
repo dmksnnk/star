@@ -13,13 +13,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var errcodeClosed = quic.StreamErrorCode(0x1003)
+
+var errControlListenerClosed = errors.New("control listener closed")
+
 type ControlListener struct {
 	eg         *errgroup.Group
 	ctrlStream *http3.RequestStream
 	conns      chan *quic.Conn
+	done       chan struct{}
 }
-
-var errcodeClosed = quic.StreamErrorCode(0x1003)
 
 func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
 	connector := p2p.NewConnector(tr, tlsConf)
@@ -53,20 +56,28 @@ func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf 
 		eg:         &eg,
 		ctrlStream: ctrlStream,
 		conns:      conns,
+		done:       make(chan struct{}),
 	}
 }
 
+// Accept waits for and returns the next incoming peer connection.
+// Returns errControlListenerClosed when listener is closed.
 func (l *ControlListener) Accept(ctx context.Context) (*quic.Conn, error) {
 	select {
 	case conn := <-l.conns:
 		return conn, nil
+	case <-l.done:
+		return nil, errControlListenerClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
+// Close closes the control stream and waits for all underlying goroutines to exit.
+// Accept will immediately unblock and return errControlListenerClosed.
 func (l *ControlListener) Close() error {
 	l.ctrlStream.CancelRead(errcodeClosed)
+	close(l.done)
 
 	if err := l.eg.Wait(); err != nil {
 		if isLocalCloseError(err) {
