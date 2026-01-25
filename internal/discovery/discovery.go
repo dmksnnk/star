@@ -234,6 +234,22 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	}
 }
 
+// Listen starts listening on the given address for incoming discovery requests.
+func (s *Server) Listen(addr string) error {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return err
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return s.Serve(conn)
+}
+
 // Close stops the discovery server.
 // Wait for any ongoing Serve calls to return to release resources.
 func (s *Server) Close() error {
