@@ -103,6 +103,16 @@ func (r *UDPRelay) Serve(conn *net.UDPConn) error {
 	return eg.Wait()
 }
 
+func (r *UDPRelay) ListenUDP(addr *net.UDPAddr) error {
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return r.Serve(conn)
+}
+
 // AddRoute adds a bidirectional route between addresses a and b.
 func (r *UDPRelay) AddRoute(a, b netip.AddrPort) {
 	r.routes.Set(a, b)
