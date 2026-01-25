@@ -91,7 +91,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	var privateDialled chan *quic.Conn // created as nil, so select ignores it
 	privateReqCtx, privateReqCancel := context.WithCancel(ctx)
 	defer privateReqCancel()
-	if public != private {
+	if public.Compare(private) != 0 {
 		privateDialled = make(chan *quic.Conn) // now it is created
 		eg.Go(func() error {
 			defer close(privateDialled)
@@ -109,7 +109,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.Info("connection established via accept")
+		c.logger.DebugContext(ctx, "connection established via accept")
 		return conn, eg.Wait()
 	case conn := <-publicDialled:
 		acceptCancel()
@@ -119,7 +119,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.Info("connection established via public dial")
+		c.logger.DebugContext(ctx, "connection established via public dial")
 		return conn, nil
 	case conn := <-privateDialled:
 		acceptCancel()
@@ -129,7 +129,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.Info("connection established via private dial")
+		c.logger.DebugContext(ctx, "connection established via private dial")
 		return conn, eg.Wait()
 	case <-ctx.Done():
 		acceptCancel()
@@ -228,15 +228,15 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 		}
 
 		if !ok {
-			c.logger.Debug("handshake rejected by peer, retrying")
+			c.logger.DebugContext(ctx, "handshake rejected by peer, retrying")
 			conn.CloseWithError(errcodeCancelled, "closing connection after rejection")
 			continue
 		}
 
 		select {
 		case dialled <- conn:
-			c.logger.Debug("handshake successful",
-				"local_addr", conn.LocalAddr().String(), "remote_addr", conn.RemoteAddr().String())
+			c.logger.DebugContext(ctx, "handshake successful",
+				"remote_addr", conn.RemoteAddr().String())
 			return nil
 		case <-ctx.Done():
 			err := fmt.Errorf("dial connection cancelled: %w", context.Cause(ctx))
