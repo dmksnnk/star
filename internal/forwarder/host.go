@@ -49,10 +49,12 @@ func (h HostConfig) Register(
 	baseURL *url.URL,
 	token auth.Token,
 ) (*Host, error) {
-	conn, publicAddr, err := DiscoverConn(ctx, h.ListenAddr, discoverySrv)
+	conn, localAddr, publicAddr, err := DiscoverConn(ctx, h.ListenAddr, discoverySrv)
 	if err != nil {
 		return nil, fmt.Errorf("discover connection: %w", err)
 	}
+
+	h.Logger.DebugContext(ctx, "discovered addresses", slog.String("local", localAddr.String()), slog.String("public", publicAddr.String()))
 
 	tr := &quic.Transport{
 		Conn: conn,
@@ -68,7 +70,7 @@ func (h HostConfig) Register(
 
 	hostAddrs := registar.AddrPair{
 		Public:  publicAddr,
-		Private: tr.Conn.LocalAddr().(*net.UDPAddr).AddrPort(),
+		Private: localAddr,
 	}
 	stream, err := client.Host(ctx, hostAddrs)
 	if err != nil {
@@ -81,10 +83,14 @@ func (h HostConfig) Register(
 	}
 	logger = logger.With("role", "host")
 
+	clc := ControlListenerConfig{
+		Logger: logger.With(slog.String("component", "control_listener")),
+	}
+
 	return &Host{
 		transport:   tr,
 		client:      client,
-		control:     ListenControl(stream, tr, client.TLSConfig()),
+		control:     clc.ListenControl(stream, tr, client.TLSConfig()),
 		logger:      logger,
 		errHandlers: h.ErrHandlers,
 	}, nil
@@ -173,16 +179,33 @@ func linkWithHost(ctx context.Context, conn *quic.Conn, gameAddr *net.UDPAddr) e
 }
 
 // DiscoverConn creates a UDP connection and discovers its public address using the discovery server.
-func DiscoverConn(ctx context.Context, addr *net.UDPAddr, discoverySrv netip.AddrPort) (*net.UDPConn, netip.AddrPort, error) {
-	conn, err := net.ListenUDP("udp", addr)
+func DiscoverConn(ctx context.Context, addr *net.UDPAddr, discoverySrv netip.AddrPort) (conn *net.UDPConn, local, remote netip.AddrPort, err error) {
+	conn, err = net.ListenUDP("udp", addr)
 	if err != nil {
-		return nil, netip.AddrPort{}, fmt.Errorf("listen UDP: %w", err)
+		return nil, netip.AddrPort{}, netip.AddrPort{}, fmt.Errorf("listen UDP: %w", err)
 	}
 
 	publicAddr, err := discovery.Bind(ctx, conn, discoverySrv)
 	if err != nil {
-		return nil, netip.AddrPort{}, fmt.Errorf("discovery public address: %w", err)
+		return nil, netip.AddrPort{}, netip.AddrPort{}, fmt.Errorf("discovery public address: %w", err)
 	}
 
-	return conn, publicAddr, nil
+	localIP, err := GetLocalIP()
+	if err != nil {
+		return nil, netip.AddrPort{}, netip.AddrPort{}, fmt.Errorf("get local IP: %w", err)
+	}
+
+	local = netip.AddrPortFrom(localIP, conn.LocalAddr().(*net.UDPAddr).AddrPort().Port())
+
+	return conn, local, publicAddr, nil
+}
+
+func GetLocalIP() (netip.Addr, error) {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	defer conn.Close()
+
+	return conn.LocalAddr().(*net.UDPAddr).AddrPort().Addr(), nil
 }

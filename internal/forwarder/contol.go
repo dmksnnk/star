@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/p2p"
@@ -17,15 +18,17 @@ var errcodeClosed = quic.StreamErrorCode(0x1003)
 
 var errControlListenerClosed = errors.New("control listener closed")
 
-type ControlListener struct {
-	eg         *errgroup.Group
-	ctrlStream *http3.RequestStream
-	conns      chan *quic.Conn
-	done       chan struct{}
+type ControlListenerConfig struct {
+	Logger *slog.Logger
 }
 
-func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
-	connector := p2p.NewConnector(tr, tlsConf)
+func (c ControlListenerConfig) ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
+	logger := c.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	connector := p2p.NewConnector(tr, tlsConf, p2p.WithLogger(logger.With(slog.String("component", "p2p.Connector"))))
 	agent := control.NewAgent()
 	conns := make(chan *quic.Conn, 1)
 
@@ -34,12 +37,14 @@ func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf 
 	agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
 		p2pConn, err := connector.Connect(ctx, cmd.PublicAddress, cmd.PrivateAddress)
 		if err != nil {
+			logger.ErrorContext(ctx, "p2p connection failed", "error", err)
 			// TODO: figure out on which error return just false without error
 			return false, fmt.Errorf("connect to peer: %w", err)
 		}
 
 		select {
 		case conns <- p2pConn:
+			logger.DebugContext(ctx, "established p2p connection", slog.String("addr", p2pConn.RemoteAddr().String()))
 			return true, nil
 		case <-ctx.Done():
 			// TODO: better error code
@@ -58,6 +63,13 @@ func ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf 
 		conns:      conns,
 		done:       make(chan struct{}),
 	}
+}
+
+type ControlListener struct {
+	eg         *errgroup.Group
+	ctrlStream *http3.RequestStream
+	conns      chan *quic.Conn
+	done       chan struct{}
 }
 
 // Accept waits for and returns the next incoming peer connection.

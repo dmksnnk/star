@@ -44,10 +44,12 @@ func (p PeerConfig) Register(
 	baseURL *url.URL,
 	token auth.Token,
 ) (*Peer, error) {
-	conn, publicAddr, err := DiscoverConn(ctx, p.RegistarListenAddr, discoverySrv)
+	conn, localAddr, publicAddr, err := DiscoverConn(ctx, p.RegistarListenAddr, discoverySrv)
 	if err != nil {
 		return nil, fmt.Errorf("discover connection: %w", err)
 	}
+
+	p.Logger.DebugContext(ctx, "discovered addresses", slog.String("local", localAddr.String()), slog.String("public", publicAddr.String()))
 
 	tr := &quic.Transport{
 		Conn: conn,
@@ -63,14 +65,14 @@ func (p PeerConfig) Register(
 
 	peerAddrs := registar.AddrPair{
 		Public:  publicAddr,
-		Private: tr.Conn.LocalAddr().(*net.UDPAddr).AddrPort(),
+		Private: localAddr,
 	}
 	controlStream, err := client.Join(ctx, peerAddrs)
 	if err != nil {
 		return nil, fmt.Errorf("create peer stream: %w", err)
 	}
 
-	gameListener, err := udp.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	gameListener, err := udp.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p.GameListenPort})
 	if err != nil {
 		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
@@ -79,12 +81,15 @@ func (p PeerConfig) Register(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger = logger.With("role", "peer")
+
+	clc := ControlListenerConfig{
+		Logger: logger.With(slog.String("component", "control_listener")),
+	}
 
 	return &Peer{
 		transport:    tr,
 		client:       client,
-		control:      ListenControl(controlStream, tr, client.TLSConfig()),
+		control:      clc.ListenControl(controlStream, tr, client.TLSConfig()),
 		gameListener: gameListener,
 		logger:       logger,
 	}, nil
@@ -108,24 +113,20 @@ func (p *Peer) UDPAddr() *net.UDPAddr {
 }
 
 func (p *Peer) AcceptAndLink(ctx context.Context) error { // TODO: handle reconnects
+	hostConn, err := p.control.Accept(ctx)
+	if err != nil {
+		return fmt.Errorf("accept peer connection: %w", err)
+	}
+
+	p.logger.Debug("accepted host connection", "addr", hostConn.RemoteAddr())
+
 	gameConn, err := p.gameListener.Accept()
 	if err != nil {
 		return fmt.Errorf("accept incoming game connection: %w", err)
 	}
 	defer gameConn.Close()
 
-	p.gameConn = gameConn
-
 	p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
-
-	hostConn, err := p.control.Accept(ctx)
-	if err != nil {
-		return fmt.Errorf("accept peer connection: %w", err)
-	}
-
-	p.hostConn = hostConn
-
-	p.logger.Debug("accepted host connection", "addr", hostConn.RemoteAddr())
 
 	if err := link(ctx, gameConn, hostConn); err != nil {
 		// TODO: meaningful error codes
