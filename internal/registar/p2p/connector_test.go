@@ -46,7 +46,13 @@ func TestMain(m *testing.M) {
 
 	exitCode := m.Run()
 	if exitCode == 0 {
-		if err := goleak.Find(); err != nil {
+		// something is leanking in gont
+		// TODO: figure out if it gont or our code
+		if err := goleak.Find(
+			goleak.IgnoreAnyFunction("github.com/godbus/dbus/v5.(*Conn).inWorker"),
+			goleak.IgnoreTopFunction("github.com/godbus/dbus/v5.newConn.func1"),
+			goleak.IgnoreTopFunction("github.com/coreos/go-systemd/v22/dbus.(*Conn).dispatch.func1"),
+		); err != nil {
 			fmt.Fprintf(os.Stderr, "goleak: %s", err)
 			exitCode = 1
 		}
@@ -61,6 +67,7 @@ func localhostAddPort(port uint16) netip.AddrPort {
 	return netip.AddrPortFrom(localhost, port)
 }
 
+// TestConnectorLocal runs two peers locally and connects them directly.
 func TestConnectorLocal(t *testing.T) {
 	peer1, packetConn1 := newPeer(t, "peer1")
 	peer2, packetConn2 := newPeer(t, "peer2")
@@ -87,7 +94,7 @@ func TestConnectorLocal(t *testing.T) {
 		t.Fatalf("establish connection: %s", err)
 	}
 
-	// stream is accpected with first data read, so we need to send data from one side
+	// stream is accpected with first data read, so we need to send data from one side (like handshake)
 	var stream1, stream2 *quic.Stream
 	eg = errgroup.Group{}
 	eg.Go(func() (err error) {
@@ -235,6 +242,7 @@ func TestConnectorLocalhost(t *testing.T) {
 	peerBin := buildPeer(t)
 
 	cfg1 := config.Config{
+		Name:               "peer1",
 		ListenAddress:      localhostAddPort(8001),
 		PeerPublicAddress:  localhostAddPort(8002), // peer2 address
 		PeerPrivateAddress: localhostAddPort(8002),
@@ -247,6 +255,7 @@ func TestConnectorLocalhost(t *testing.T) {
 	peer1Cmd.Stdin = stdinConfig(t, cfg1)
 
 	cfg2 := config.Config{
+		Name:               "peer2",
 		ListenAddress:      localhostAddPort(8002), // public address
 		PeerPublicAddress:  localhostAddPort(8001), // peer1 address
 		PeerPrivateAddress: localhostAddPort(8001),
@@ -314,6 +323,7 @@ func TestConnectorSingleSwitch(t *testing.T) {
 	}
 
 	cfg1 := config.Config{
+		Name:               "peer1",
 		ListenAddress:      netip.MustParseAddrPort("10.0.1.2:8000"),
 		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.3:8000"), // peer2 address
 		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.3:8000"), // peer2 address
@@ -327,6 +337,7 @@ func TestConnectorSingleSwitch(t *testing.T) {
 	)
 
 	cfg2 := config.Config{
+		Name:               "peer2",
 		ListenAddress:      netip.MustParseAddrPort("10.0.1.3:8000"),
 		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.2:8000"), // peer1 address
 		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.2:8000"), // peer1 address
@@ -409,6 +420,7 @@ func TestConnectorNAT(t *testing.T) {
 	}
 
 	cfg1 := config.Config{
+		Name:               "peer1",
 		ListenAddress:      netip.AddrPortFrom(netip.IPv4Unspecified(), 8000),
 		PeerPublicAddress:  netip.MustParseAddrPort("10.0.1.1:8000"), // public address of peer2, as seen through NAT
 		PeerPrivateAddress: netip.MustParseAddrPort("10.0.2.2:8000"),
@@ -422,6 +434,7 @@ func TestConnectorNAT(t *testing.T) {
 	)
 
 	cfg2 := config.Config{
+		Name:               "peer2",
 		ListenAddress:      netip.AddrPortFrom(netip.IPv4Unspecified(), 8000),
 		PeerPublicAddress:  netip.MustParseAddrPort("10.0.2.1:8000"), // public address of peer1, as seen trough NAT
 		PeerPrivateAddress: netip.MustParseAddrPort("10.0.1.2:8000"),

@@ -9,6 +9,7 @@ import (
 
 // Config defines the configuration for the peer test program.
 type Config struct {
+	Name               string
 	ListenAddress      netip.AddrPort
 	PeerPublicAddress  netip.AddrPort
 	PeerPrivateAddress netip.AddrPort

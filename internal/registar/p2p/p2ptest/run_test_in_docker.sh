@@ -2,16 +2,19 @@
 
 set -e
 
-if [ -z "$1" ]; then
-    echo "usage: $0 <test_name> [test_name2 ...]"
-    exit 1
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# Build test run arguments
+RUN_ARG=""
+if [ -n "$1" ]; then
+    TEST_NAMES="$*"
+    # replace spaces with |
+    TEST_NAMES_REGEX="${TEST_NAMES// /|}"
+    RUN_ARG="-run ^${TEST_NAMES_REGEX}$"
 fi
 
-TEST_NAMES="$*"
-# replace spaces with |
-TEST_NAMES_REGEX="${TEST_NAMES// /|}"
-
-docker build -t stun:0.0.1 -f Dockerfile .
+docker build -t stun:0.0.1 -f "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR"
 docker run -it --rm \
     --volume "$(pwd)":"$(pwd)" \
     --workdir "$(pwd)" \
@@ -23,4 +26,4 @@ docker run -it --rm \
     --volume "$(go env GOCACHE):/root/.cache/go-build" \
     --volume "$(go env GOMODCACHE):/go/pkg/mod" \
     stun:0.0.1 \
-    go test -count=1 -v -run ^"${TEST_NAMES_REGEX}"$ ./...
+    go test -count=1 -v $RUN_ARG github.com/dmksnnk/star/internal/registar/p2p
