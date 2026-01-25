@@ -115,7 +115,7 @@ func (l *Listener) readLoop() {
 		}
 
 		if err := l.dispatch(addr, buf[:n]); err != nil {
-			l.logger.Error("can't dispatch packet", "error", err, "address", addr.String())
+			l.logger.Error("can't dispatch packet", "error", err, "addr", addr.String())
 		}
 	}
 }

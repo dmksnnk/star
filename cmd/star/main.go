@@ -106,7 +106,7 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 	}
 	defer peer.Close()
 
-	logger.Info("peer listening", "address", peer.UDPAddr().String())
+	logger.Info("peer listening", "addr", peer.UDPAddr().String())
 
 	if err := peer.AcceptAndLink(ctx); err != nil {
 		logger.Error("accept and link", "error", err)

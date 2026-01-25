@@ -83,7 +83,7 @@ func (p PeerConfig) Register(
 	}
 
 	clc := ControlListenerConfig{
-		Logger: logger.With(slog.String("component", "control_listener")),
+		Logger: logger.With(slog.String("component", "ControlListener")),
 	}
 
 	return &Peer{
@@ -118,7 +118,7 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error { // TODO: handle reconn
 		return fmt.Errorf("accept peer connection: %w", err)
 	}
 
-	p.logger.Debug("accepted host connection", "addr", hostConn.RemoteAddr())
+	p.logger.Debug("accepted host connection", "remote_addr", hostConn.RemoteAddr().String())
 
 	gameConn, err := p.gameListener.Accept()
 	if err != nil {

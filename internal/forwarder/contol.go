@@ -44,7 +44,7 @@ func (c ControlListenerConfig) ListenControl(ctrlStream *http3.RequestStream, tr
 
 		select {
 		case conns <- p2pConn:
-			logger.DebugContext(ctx, "established p2p connection", slog.String("addr", p2pConn.RemoteAddr().String()))
+			logger.DebugContext(ctx, "established p2p connection", slog.String("remote_addr", p2pConn.RemoteAddr().String()))
 			return true, nil
 		case <-ctx.Done():
 			// TODO: better error code

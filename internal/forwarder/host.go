@@ -84,7 +84,7 @@ func (h HostConfig) Register(
 	logger = logger.With("role", "host")
 
 	clc := ControlListenerConfig{
-		Logger: logger.With(slog.String("component", "control_listener")),
+		Logger: logger.With(slog.String("component", "ControlListener")),
 	}
 
 	return &Host{
@@ -117,13 +117,13 @@ func (h *Host) Run(ctx context.Context, gameAddr *net.UDPAddr) error {
 			return fmt.Errorf("accept peer connection: %w", err)
 		}
 
-		h.logger.Debug("accepted peer connection", "addr", peerConn.RemoteAddr())
+		h.logger.Debug("accepted peer connection", "remote_addr", peerConn.RemoteAddr().String())
 
 		h.wg.Add(1)
 		go func() {
 			defer h.wg.Done()
 			defer peerConn.CloseWithError(0, "closing connection")
-			defer h.logger.Debug("link finished", "addr", peerConn.RemoteAddr())
+			defer h.logger.Debug("link finished", "remote_addr", peerConn.RemoteAddr().String())
 
 			if err := linkWithHost(ctx, peerConn, gameAddr); err != nil {
 				// Close() called
