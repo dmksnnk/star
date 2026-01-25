@@ -72,14 +72,17 @@ func (p PeerConfig) Register(
 		return nil, fmt.Errorf("create peer stream: %w", err)
 	}
 
-	gameListener, err := udp.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p.GameListenPort})
-	if err != nil {
-		return nil, fmt.Errorf("listen UDP: %w", err)
-	}
-
 	logger := p.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	lc := udp.ListenConfig{
+		Logger: logger.With(slog.String("component", "udp.ListenConfig")),
+	}
+	gameListener, err := lc.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p.GameListenPort})
+	if err != nil {
+		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
 
 	clc := ControlListenerConfig{
