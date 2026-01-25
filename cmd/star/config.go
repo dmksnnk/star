@@ -4,13 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"os"
 
 	"github.com/dmksnnk/star/internal/registar/auth"
 )
-
-var defaultURL = textURL{}
 
 const stardewPort = 24642
 
@@ -22,18 +22,20 @@ Commands:
 type commandConfig struct {
 	FS *flag.FlagSet
 
-	Command  string
-	Secret   string
-	Registar textURL
-	Port     int
-	CaCert   string
+	Command   string
+	Secret    string
+	Registar  textURL
+	Discovery addrPort
+	Port      int
+	CaCert    string
 }
 
 func (c *commandConfig) Parse(args []string) error {
 	c.FS = flag.NewFlagSet("star", flag.ExitOnError)
 	c.FS.StringVar(&c.Secret, "secret", "", "secret key (required)")
-	c.FS.TextVar(&c.Registar, "registar", defaultURL, "registar URL")
-	c.FS.IntVar(&c.Port, "port", 0, "port to linsten on, if not set, listen on system assigned port")
+	c.FS.TextVar(&c.Registar, "registar", textURL{}, "registar URL")
+	c.FS.TextVar(&c.Discovery, "discovery", addrPort{}, "discovery server address (host:port)")
+	c.FS.IntVar(&c.Port, "port", 0, "port to listen on, if not set, listen on system assigned port")
 	c.FS.StringVar(&c.CaCert, "ca-cert", "", "path to CA certificate for registar")
 	c.FS.Usage = func() {
 		fmt.Fprintln(c.FS.Output()) // just a newline
@@ -59,13 +61,21 @@ func (c *commandConfig) Parse(args []string) error {
 		return errors.New("missing secret")
 	}
 
+	if !c.Discovery.IsValid() {
+		return errors.New("missing discovery server address")
+	}
+
+	if c.Registar.URL == nil {
+		return errors.New("missing registar URL")
+	}
+
 	return nil
 }
 
 type hostConfig struct {
-	FS           *flag.FlagSet
-	GameHostPort int
-	GameKey      auth.Key
+	FS       *flag.FlagSet
+	GamePort int
+	GameKey  auth.Key
 }
 
 func (c *hostConfig) Parse(args []string) error {
@@ -77,15 +87,24 @@ func (c *hostConfig) Parse(args []string) error {
 		c.FS.PrintDefaults()
 	}
 
-	c.FS.IntVar(&c.GameHostPort, "game-host-port", stardewPort, "the port on which game host listens")
-	c.FS.TextVar(&c.GameKey, "game-key", auth.Key{}, "the key of the game to register. If not set, a new key will be generated")
-	return c.FS.Parse(args[1:])
+	c.FS.IntVar(&c.GamePort, "port", stardewPort, "the port on which game host listens")
+	c.FS.TextVar(&c.GameKey, "key", auth.Key{}, "the key of the game to register. If not set, a new key will be generated")
+
+	if err := c.FS.Parse(args); err != nil {
+		return err
+	}
+
+	if c.GameKey == (auth.Key{}) {
+		c.GameKey = auth.NewKey()
+	}
+
+	return nil
 }
 
 type peerConfig struct {
-	FS      *flag.FlagSet
-	GameKey auth.Key
-	PeerID  string
+	FS             *flag.FlagSet
+	Key            auth.Key
+	GameListenPort int
 }
 
 func (c *peerConfig) Parse(args []string) error {
@@ -97,18 +116,15 @@ func (c *peerConfig) Parse(args []string) error {
 		c.FS.PrintDefaults()
 	}
 
-	c.FS.TextVar(&c.GameKey, "game-key", auth.Key{}, "the key of the game to connect to (required)")
-	c.FS.StringVar(&c.PeerID, "peer-id", "", "the ID of the peer to connect to (required)")
+	c.FS.TextVar(&c.Key, "key", auth.Key{}, "the key of the game to connect to (required)")
+	c.FS.IntVar(&c.GameListenPort, "listen-port", 0, "the port on which listen for game traffic. If 0, a random port will be chosen.")
 
-	if err := c.FS.Parse(args[1:]); err != nil {
+	if err := c.FS.Parse(args); err != nil {
 		return err
 	}
 
-	if c.GameKey == (auth.Key{}) {
+	if c.Key == (auth.Key{}) {
 		return errors.New("missing game key")
-	}
-	if c.PeerID == "" {
-		return errors.New("missing peer ID")
 	}
 
 	return nil
@@ -137,6 +153,31 @@ func (u textURL) MarshalText() ([]byte, error) {
 	if u.URL == nil {
 		return nil, nil
 	}
-
 	return []byte(u.String()), nil
+}
+
+type addrPort struct {
+	netip.AddrPort
+}
+
+func (a *addrPort) UnmarshalText(text []byte) error {
+	if len(text) == 0 {
+		return nil
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", string(text))
+	if err != nil {
+		return fmt.Errorf("resolve address %q: %w", text, err)
+	}
+
+	*a = addrPort{udpAddr.AddrPort()}
+	return nil
+}
+
+func (a addrPort) MarshalText() ([]byte, error) {
+	if !a.IsValid() {
+		return nil, nil
+	}
+
+	return []byte(a.String()), nil
 }
