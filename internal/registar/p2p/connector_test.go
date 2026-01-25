@@ -67,6 +67,101 @@ func localhostAddPort(port uint16) netip.AddrPort {
 	return netip.AddrPortFrom(localhost, port)
 }
 
+// TestConnectorCancelsPrivateDialWhenPublicSucceeds verifies that when public dial succeeds,
+// the private dial is cancelled immediately rather than waiting for a 30s timeout.
+//
+// Scenario:
+// - peer1 calls Connect() with different public/private addresses
+// - A mock peer responds to ONE connection (public) then stops responding
+// - peer1's private dial establishes QUIC but gets no handshake response
+// - Without the fix: private dial waits 30s in http.ReadResponse
+// - With the fix: private dial is cancelled immediately when public succeeds
+func TestConnectorCancelsPrivateDialWhenPublicSucceeds(t *testing.T) {
+	// Create peer1's connector
+	peer1, _ := newPeer(t, "peer1")
+
+	// Create mock peer that only responds to ONE connection (public address)
+	mockPublicTransport, mockTLSConfig := newPeerTransport(t)
+	mockPublicAddr := mockPublicTransport.Conn.LocalAddr().(*net.UDPAddr).AddrPort()
+
+	// Create a separate transport for private address that accepts connections
+	// but never responds to handshakes (simulating peer that already returned from Connect)
+	mockPrivateTransport, _ := newPeerTransport(t)
+	mockPrivateAddr := mockPrivateTransport.Conn.LocalAddr().(*net.UDPAddr).AddrPort()
+
+	// Start mock peer's listener that responds to exactly one handshake
+	mockListener, err := mockPublicTransport.ListenEarly(mockTLSConfig, &quic.Config{EnableDatagrams: true})
+	if err != nil {
+		t.Fatalf("mock listen: %s", err)
+	}
+
+	// Start a "dead" listener on private address that accepts QUIC but never responds to handshakes
+	deadListener, err := mockPrivateTransport.ListenEarly(mockTLSConfig, &quic.Config{EnableDatagrams: true})
+	if err != nil {
+		t.Fatalf("dead listen: %s", err)
+	}
+
+	// Accept connections on private address but never respond (simulates peer that stopped)
+	go func() {
+		for {
+			conn, err := deadListener.Accept(context.Background())
+			if err != nil {
+				return // listener closed
+			}
+			// Accept the QUIC connection but never respond to the handshake stream
+			// This simulates a peer that established QUIC but then went away
+			_ = conn
+		}
+	}()
+
+	// Mock peer: accept one connection and respond to handshake
+	go func() {
+		defer mockListener.Close()
+		defer deadListener.Close()
+
+		conn, err := mockListener.Accept(context.Background())
+		if err != nil {
+			t.Errorf("mock accept: %s", err)
+			return
+		}
+
+		// Accept handshake stream and respond
+		stream, err := conn.AcceptStream(context.Background())
+		if err != nil {
+			t.Errorf("mock accept stream: %s", err)
+			return
+		}
+
+		// Read the HTTP request (just drain it)
+		buf := make([]byte, 1024)
+		stream.Read(buf)
+
+		// Send OK response
+		resp := "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+		stream.Write([]byte(resp))
+		stream.Close()
+
+		// Don't accept any more connections - simulating that we returned from Connect()
+	}()
+
+	// Use a short timeout - if the bug exists (private dial blocks for 30s),
+	// this test will fail with context deadline exceeded
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// peer1 connects with different public/private addresses
+	// Public will succeed, private will establish QUIC but get no handshake response
+	conn, err := peer1.Connect(ctx, mockPublicAddr, mockPrivateAddr)
+	if err != nil {
+		t.Fatalf("connect failed: %s", err)
+	}
+
+	if conn == nil {
+		t.Fatal("expected connection to be established")
+	}
+	conn.CloseWithError(0, "test done")
+}
+
 // TestConnectorLocal runs two peers locally and connects them directly.
 func TestConnectorLocal(t *testing.T) {
 	peer1, packetConn1 := newPeer(t, "peer1")
@@ -134,6 +229,17 @@ func TestConnectorLocal(t *testing.T) {
 }
 
 func newPeer(t *testing.T, name string) (*p2p.Connector, net.PacketConn) {
+	transport, tlsConfig := newPeerTransport(t)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger = logger.With("connector", name)
+	connector := p2p.NewConnector(transport, tlsConfig, p2p.WithLogger(logger))
+	return connector, transport.Conn
+}
+
+func newPeerTransport(t *testing.T) (*quic.Transport, *tls.Config) {
+	t.Helper()
+
 	addr := &net.UDPAddr{
 		IP:   net.IPv4(127, 0, 0, 1),
 		Port: 0,
@@ -157,6 +263,7 @@ func newPeer(t *testing.T, name string) (*p2p.Connector, net.PacketConn) {
 			t.Errorf("close QUIC transport: %s", err)
 		}
 	})
+
 	privkey, err := cert.NewPrivateKey()
 	if err != nil {
 		t.Fatal("create server private key:", err)
@@ -179,10 +286,7 @@ func newPeer(t *testing.T, name string) (*p2p.Connector, net.PacketConn) {
 		RootCAs: pool,
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	logger = logger.With("connector", name)
-	connector := p2p.NewConnector(transport, tlsConfig, p2p.WithLogger(logger))
-	return connector, conn
+	return transport, tlsConfig
 }
 
 func runConnTest(t *testing.T, conn1, conn2 io.ReadWriteCloser) {

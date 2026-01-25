@@ -220,11 +220,13 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 		ok, err := c.sendHandshake(ctx, conn)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				err := fmt.Errorf("send handshake cancelled: %w", context.Cause(ctx))
-				return conn.CloseWithError(errcodeCancelled, err.Error())
+				return conn.CloseWithError(errcodeCancelled, fmt.Sprintf("cancelled: %v", context.Cause(ctx)))
+			}
+			if isCancelledStreamError(err) {
+				return conn.CloseWithError(errcodeCancelled, fmt.Sprintf("cancelled: %v", context.Cause(ctx)))
 			}
 
-			return fmt.Errorf("send handshake to public address: %w", err)
+			return fmt.Errorf("send handshake to %s: %w", addr, err)
 		}
 
 		if !ok {
@@ -304,6 +306,17 @@ func (c *Connector) sendHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 		stream.Close()
 	}()
 
+	// cancel stream read when context is cancelled to unblock http.ReadResponse
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			stream.CancelRead(quic.StreamErrorCode(errcodeCancelled))
+		case <-done:
+		}
+	}()
+
 	if err := req.Write(stream); err != nil {
 		return false, fmt.Errorf("write request: %w", err)
 	}
@@ -332,6 +345,13 @@ func isConflictError(err error) bool {
 	}
 
 	return false
+}
+
+func isCancelledStreamError(err error) bool {
+	var streamErr *quic.StreamError
+	return errors.As(err, &streamErr) &&
+		streamErr.ErrorCode == quic.StreamErrorCode(errcodeCancelled) &&
+		!streamErr.Remote
 }
 
 func (c *Connector) newRequest(ctx context.Context) (*http.Request, error) {
