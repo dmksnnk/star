@@ -6,22 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/netip"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 // Controller issues commands.
 type Controller struct {
-	tr *transport
+	conn *http3.ClientConn
 }
 
 // NewController creates a new controller on a connection to the agent.
-func NewController(conn io.ReadWriter) *Controller {
+func NewController(conn *quic.Conn) *Controller {
+	tr := &http3.Transport{}
+
 	return &Controller{
-		tr: newTransport(conn),
+		conn: tr.NewClientConn(conn),
 	}
 }
 
@@ -33,41 +36,27 @@ func (c *Controller) ConnectTo(ctx context.Context, public, private netip.AddrPo
 		PrivateAddress: private,
 	}
 
-	if err := c.do(ctx, http.MethodPost, "/connect-to", cmd); err != nil {
-		var e *httpplatform.BadStatusCodeError
-		if errors.As(err, &e) && e.StatusCode == StatusCodeConnectFailed {
-			return ErrConnectFailed
-		}
-
-		return err
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(cmd); err != nil {
+		return fmt.Errorf("encode body: %w", err)
 	}
-
-	return nil
-}
-
-func (c *Controller) do(ctx context.Context, method, url string, body any) error {
-	var reqBody io.Reader = http.NoBody
-	if body != nil {
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			return fmt.Errorf("encode body: %w", err)
-		}
-
-		reqBody = &buf
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	// must set fake host, as http3 requires valid URL with host
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://star/connect-to", &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := c.tr.RoundTrip(req)
+	resp, err := c.conn.RoundTrip(req)
 	if err != nil {
 		return fmt.Errorf("round trip: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == StatusCodeConnectFailed {
+			return ErrConnectFailed
+		}
+
 		return httpplatform.NewBadStatusCodeError(resp.StatusCode, resp.Body)
 	}
 

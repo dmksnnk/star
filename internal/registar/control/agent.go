@@ -3,8 +3,10 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
+
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 const StatusCodeConnectFailed = http.StatusPreconditionFailed
@@ -45,7 +47,10 @@ func (a *Agent) OnConnectTo(f func(ctx context.Context, cmd ConnectCommand) (boo
 
 // Serve serves the connection.
 // To stop the Agent, connection should be closed.
-func (a *Agent) Serve(conn io.ReadWriter) error {
-	srv := newServer(a.mux)
-	return srv.Serve(conn)
+func (a *Agent) Serve(conn *quic.Conn) error {
+	srv := &http3.Server{
+		Handler: a.mux,
+	}
+
+	return srv.ServeQUICConn(conn)
 }
