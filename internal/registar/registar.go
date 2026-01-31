@@ -2,15 +2,18 @@ package registar
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/relay"
-	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/quic-go"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -18,12 +21,22 @@ var (
 	ErrHostAlreadyExists = errors.New("host already exists")
 )
 
-type Registar2 struct {
-	mux   sync.RWMutex
-	hosts map[auth.Key]Peer
+const (
+	defaultConnectTimeout = time.Minute
+)
 
-	relayAddr netip.AddrPort
-	relay     *relay.UDPRelay
+type AddrPair struct {
+	Public  netip.AddrPort
+	Private netip.AddrPort
+}
+
+type Registar2 struct {
+	caAuthority *Authority
+	relayAddr   netip.AddrPort
+	relay       *relay.UDPRelay
+
+	mux   sync.RWMutex
+	hosts map[auth.Key]peer
 }
 
 // TODO: implement host removal on host disconnect
@@ -33,18 +46,23 @@ type Registar2 struct {
 
 var _ Registar = (*Registar2)(nil)
 
-func NewRegistar2(relayAddr netip.AddrPort, relay *relay.UDPRelay) *Registar2 {
+func NewRegistar2(ca *Authority, relayAddr netip.AddrPort, relay *relay.UDPRelay) *Registar2 {
 	return &Registar2{
-		hosts:     make(map[auth.Key]Peer),
-		relayAddr: relayAddr,
-		relay:     relay,
+		caAuthority: ca,
+		relayAddr:   relayAddr,
+		relay:       relay,
+		hosts:       make(map[auth.Key]peer),
 	}
+}
+
+func (r *Registar2) NewSessionCert(key auth.Key, csr *x509.CertificateRequest) (caCert, cert *x509.Certificate, err error) {
+	return r.caAuthority.NewSessionCert(key, csr)
 }
 
 func (r *Registar2) Host(
 	ctx context.Context,
 	key auth.Key,
-	streamer http3.HTTPStreamer,
+	conn *quic.Conn,
 	addrs AddrPair,
 ) error {
 	r.mux.Lock()
@@ -53,9 +71,15 @@ func (r *Registar2) Host(
 	if _, ok := r.hosts[key]; ok {
 		return ErrHostAlreadyExists
 	}
-	stream := streamer.HTTPStream()
 
-	r.hosts[key] = NewPeer(addrs, stream)
+	r.hosts[key] = newPeer(addrs, conn)
+	context.AfterFunc(conn.Context(), func() {
+		r.mux.Lock()
+		defer r.mux.Unlock()
+
+		delete(r.hosts, key)
+		r.caAuthority.RemoveSessionCA(key)
+	})
 
 	return nil
 }
@@ -63,14 +87,14 @@ func (r *Registar2) Host(
 func (r *Registar2) Join(
 	ctx context.Context,
 	key auth.Key,
-	streamer http3.HTTPStreamer,
+	conn *quic.Conn,
 	addrs AddrPair,
 ) error {
 	host, ok := r.host(key)
 	if !ok {
 		return ErrHostNotFound
 	}
-	peer := NewPeer(addrs, streamer.HTTPStream())
+	peer := newPeer(addrs, conn)
 
 	if err := initP2P(ctx, host, peer); err != nil {
 		if !errors.Is(err, control.ErrConnectFailed) {
@@ -88,10 +112,52 @@ func (r *Registar2) Join(
 	return nil
 }
 
-func (r *Registar2) host(key auth.Key) (Peer, bool) {
+func (r *Registar2) host(key auth.Key) (peer, bool) {
 	r.mux.RLock()
 	defer r.mux.RUnlock()
 
 	host, ok := r.hosts[key]
 	return host, ok
+}
+
+type peer struct {
+	addrs      AddrPair
+	controller *control.Controller
+}
+
+func newPeer(addrs AddrPair, conn *quic.Conn) peer {
+	return peer{
+		addrs:      addrs,
+		controller: control.NewController(conn),
+	}
+}
+
+func initP2P(ctx context.Context, host, peer peer) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
+	defer cancel()
+
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return host.controller.ConnectTo(ctx, peer.addrs.Public, peer.addrs.Private)
+	})
+	eg.Go(func() error {
+		return peer.controller.ConnectTo(ctx, host.addrs.Public, host.addrs.Private)
+	})
+
+	return eg.Wait()
+}
+
+func initRelay(ctx context.Context, host, peer peer, relayAddr netip.AddrPort) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
+	defer cancel()
+
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return host.controller.ConnectTo(ctx, relayAddr, relayAddr)
+	})
+	eg.Go(func() error {
+		return peer.controller.ConnectTo(ctx, relayAddr, relayAddr)
+	})
+
+	return eg.Wait()
 }

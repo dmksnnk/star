@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dmksnnk/star/internal/platform/quictest"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
@@ -17,20 +18,12 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-var (
-	secret = []byte("secret")
-	key    = auth.NewKey()
-)
+var key = auth.NewKey()
 
 func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
-	relay, relayAddr := integrationtest.ServeRelay(t)
+	reg, _ := newRegistar(t)
 
-	reg := registar.NewRegistar2(relayAddr, relay)
-
-	srv := integrationtest.NewServer(t, secret, reg)
-
-	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
-	peer := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+	hostClientConn, hostServer := quictest.Pipe(t)
 
 	hostAddrs := registar.AddrPair{
 		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
@@ -39,11 +32,6 @@ func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 	peerAddrs := registar.AddrPair{
 		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
 		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
-	}
-
-	hostStream, err := host.Host(context.TODO(), hostAddrs)
-	if err != nil {
-		t.Fatalf("Host: %s", err)
 	}
 
 	hostAgent := control.NewAgent()
@@ -59,12 +47,13 @@ func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 		close(hostAgentCalled)
 		return true, nil
 	})
-	integrationtest.ServeAgent(t, hostAgent, hostStream)
+	integrationtest.ServeAgent(t, hostAgent, hostServer)
 
-	peerStream, err := peer.Join(context.TODO(), peerAddrs)
-	if err != nil {
-		t.Fatalf("Join: %s", err)
+	if err := reg.Host(context.TODO(), key, hostClientConn, hostAddrs); err != nil {
+		t.Fatalf("Host: %s", err)
 	}
+
+	peerClient, peerServer := quictest.Pipe(t)
 
 	peerAgent := control.NewAgent()
 	peerAgentCalled := make(chan struct{})
@@ -80,21 +69,34 @@ func TestRegistar_Host_Join_ViaP2P(t *testing.T) {
 		close(peerAgentCalled)
 		return true, nil
 	})
-	integrationtest.ServeAgent(t, peerAgent, peerStream)
+	integrationtest.ServeAgent(t, peerAgent, peerServer)
+
+	if err := reg.Join(context.TODO(), key, peerClient, peerAddrs); err != nil {
+		t.Fatalf("Join: %s", err)
+	}
 
 	wait(t, hostAgentCalled)
 	wait(t, peerAgentCalled)
+
+	// t.Run("remove connection on close", func(t *testing.T) {
+	// 	err := reg.Host(context.TODO(), key, hostClientConn, hostAddrs)
+	// 	if !errors.Is(err, registar.ErrHostAlreadyExists) {
+	// 		t.Errorf("expected ErrHostAlreadyExists, got %s", err)
+	// 	}
+
+	// 	hostClientConn.CloseWithError(0, "bye!")
+
+	// 	err = reg.Host(context.TODO(), key, hostClientConn, hostAddrs)
+	// 	if err != nil {
+	// 		t.Fatalf("unexpected error on re-Host after close: %s", err)
+	// 	}
+	// })
 }
 
 func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
-	relay, relayAddr := integrationtest.ServeRelay(t)
+	reg, relayAddr := newRegistar(t)
 
-	reg := registar.NewRegistar2(relayAddr, relay)
-
-	srv := integrationtest.NewServer(t, secret, reg)
-
-	host := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
-	peer := integrationtest.NewClient(t, integrationtest.NewLocalQUICTransport(t), srv, secret, key)
+	hostClient, hostServer := quictest.Pipe(t)
 
 	hostAddrs := registar.AddrPair{
 		Public:  netip.MustParseAddrPort("10.0.0.1:1234"),
@@ -105,16 +107,11 @@ func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
 		Private: netip.MustParseAddrPort("10.0.0.1:4567"),
 	}
 
-	hostStream, err := host.Host(context.TODO(), hostAddrs)
-	if err != nil {
-		t.Fatalf("Host: %s", err)
-	}
-
 	hostAgent := control.NewAgent()
 	hostAgentConnectRelayCalled := make(chan struct{})
 	hostAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
 		if cmd.PrivateAddress == peerAddrs.Private && cmd.PublicAddress == peerAddrs.Public {
-			return false, nil // simultate P2P failure
+			return false, nil // simulate P2P failure
 		}
 
 		if cmd.PrivateAddress == relayAddr && cmd.PublicAddress == relayAddr {
@@ -124,18 +121,19 @@ func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
 
 		return true, nil
 	})
-	integrationtest.ServeAgent(t, hostAgent, hostStream)
+	integrationtest.ServeAgent(t, hostAgent, hostServer)
 
-	peerStream, err := peer.Join(context.TODO(), peerAddrs)
-	if err != nil {
-		t.Fatalf("Join: %s", err)
+	if err := reg.Host(context.TODO(), key, hostClient, hostAddrs); err != nil {
+		t.Fatalf("Host: %s", err)
 	}
+
+	peerClient, peerServer := quictest.Pipe(t)
 
 	peerAgent := control.NewAgent()
 	peerAgentConnectRelayCalled := make(chan struct{})
 	peerAgent.OnConnectTo(func(_ context.Context, cmd control.ConnectCommand) (bool, error) {
 		if cmd.PrivateAddress == hostAddrs.Private && cmd.PublicAddress == hostAddrs.Public {
-			return false, nil // simultate P2P failure
+			return false, nil // simulate P2P failure
 		}
 
 		if cmd.PrivateAddress == relayAddr && cmd.PublicAddress == relayAddr {
@@ -145,10 +143,27 @@ func TestRegistar_Host_Join_ViaRelay(t *testing.T) {
 
 		return true, nil
 	})
-	integrationtest.ServeAgent(t, peerAgent, peerStream)
+	integrationtest.ServeAgent(t, peerAgent, peerServer)
+
+	if err := reg.Join(context.TODO(), key, peerClient, peerAddrs); err != nil {
+		t.Fatalf("Join: %s", err)
+	}
 
 	wait(t, hostAgentConnectRelayCalled)
 	wait(t, peerAgentConnectRelayCalled)
+}
+
+func newRegistar(t *testing.T) (*registar.Registar2, netip.AddrPort) {
+	relay, relayAddr := integrationtest.ServeRelay(t)
+
+	rootCA, err := registar.NewRootCA()
+	if err != nil {
+		t.Fatalf("NewRootCA: %s", err)
+	}
+	authority := registar.NewAuthority(rootCA)
+	reg := registar.NewRegistar2(authority, relayAddr, relay)
+
+	return reg, relayAddr
 }
 
 func wait[T any](t *testing.T, ch <-chan T) T {
