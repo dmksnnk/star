@@ -157,13 +157,13 @@ func newSerialNumber() (*big.Int, error) {
 type Authority struct {
 	root       RootCA
 	mux        sync.Mutex
-	sessionCAs map[auth.Key]*SessionCA
+	sessionsCA map[auth.Key]*SessionCA
 }
 
 func NewAuthority(root RootCA) *Authority {
 	return &Authority{
 		root:       root,
-		sessionCAs: make(map[auth.Key]*SessionCA),
+		sessionsCA: make(map[auth.Key]*SessionCA),
 	}
 }
 
@@ -173,13 +173,13 @@ func (a *Authority) NewSessionCert(key auth.Key, csr *x509.CertificateRequest) (
 	a.mux.Lock()
 	defer a.mux.Unlock()
 
-	ca, ok := a.sessionCAs[key]
+	ca, ok := a.sessionsCA[key]
 	if !ok {
 		sca, err := a.root.NewSessionCA()
 		if err != nil {
 			return nil, nil, fmt.Errorf("create session CA: %w", err)
 		}
-		a.sessionCAs[key] = sca
+		a.sessionsCA[key] = sca
 		ca = sca
 	}
 
@@ -200,5 +200,5 @@ func (a *Authority) RemoveSessionCA(key auth.Key) {
 	a.mux.Lock()
 	defer a.mux.Unlock()
 
-	delete(a.sessionCAs, key)
+	delete(a.sessionsCA, key)
 }

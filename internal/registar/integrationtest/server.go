@@ -1,30 +1,78 @@
 package integrationtest
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"testing"
 
 	"github.com/dmksnnk/star/internal/discovery"
 	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/relay"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
-func NewServer(t *testing.T, secret []byte, reg registar.Registar) *http3test.Server {
+func NewServer(t *testing.T, reg registar.Registar, secret []byte) *Server {
 	t.Helper()
 
-	rootCA, err := registar.NewRootCA()
-	if err != nil {
-		t.Fatalf("NewRootCA: %s", err)
+	srv := registar.NewServer(reg)
+	srv = registar.SetRouter(srv, secret)
+
+	conn := NewLocalUDPConn(t)
+
+	ca, tlsConf := http3test.ServerTLSConfig(t, conn.LocalAddr().(*net.UDPAddr).IP)
+
+	srv.H3.TLSConfig = tlsConf
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return srv.Serve(conn)
+	})
+
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Error("shutdown server:", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			if !errors.Is(err, http.ErrServerClosed) {
+				t.Error("server server:", err)
+			}
+		}
+	})
+
+	return &Server{
+		ca:   ca,
+		conn: conn,
 	}
+}
 
-	caAuthority := registar.NewAuthority(rootCA)
-	api := registar.NewAPI(reg, caAuthority)
-	router := registar.NewRouter(api, secret)
+type Server struct {
+	ca   *x509.Certificate
+	conn *net.UDPConn
+}
 
-	return http3test.NewTestServer(t, router)
+func (s *Server) TLSConfig() *tls.Config {
+	root := x509.NewCertPool()
+	root.AddCert(s.ca)
+
+	return &tls.Config{
+		RootCAs:    root,
+		NextProtos: []string{http3.NextProtoH3},
+	}
+}
+
+func (s *Server) URL() *url.URL {
+	return &url.URL{
+		Scheme: "https",
+		Host:   s.conn.LocalAddr().String(),
+	}
 }
 
 func ServeDiscovery(t *testing.T) netip.AddrPort {

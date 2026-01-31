@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"time"
 
 	"github.com/dmksnnk/star/internal/registar/control"
+	"github.com/quic-go/quic-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -77,9 +77,9 @@ type Peer struct {
 	controller *control.Controller
 }
 
-func NewPeer(addrs AddrPair, controlStream io.ReadWriter) Peer {
+func NewPeer(addrs AddrPair, conn *quic.Conn) Peer {
 	return Peer{
 		addrs:      addrs,
-		controller: control.NewController(controlStream),
+		controller: control.NewController(conn),
 	}
 }

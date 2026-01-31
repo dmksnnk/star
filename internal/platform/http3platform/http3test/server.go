@@ -22,10 +22,7 @@ type Server struct {
 	conn net.PacketConn
 }
 
-// NewTestServer creates a new test server with the given handler.
-// It has a self-signed CA and a server certificate.
-// It closes itself on test cleanup.
-func NewTestServer(t *testing.T, handler http.Handler) *Server {
+func ServerTLSConfig(t *testing.T, ip net.IP) (*x509.Certificate, *tls.Config) {
 	t.Helper()
 
 	ca, caPrivateKey, err := cert.NewCA()
@@ -37,12 +34,12 @@ func NewTestServer(t *testing.T, handler http.Handler) *Server {
 	if err != nil {
 		t.Fatal("create server private key:", err)
 	}
-	srvCert, err := cert.NewIPCert(ca, caPrivateKey, srvPrivkey.Public(), net.IPv4(127, 0, 0, 1))
+	srvCert, err := cert.NewIPCert(ca, caPrivateKey, srvPrivkey.Public(), ip)
 	if err != nil {
 		t.Fatal("create server cert:", err)
 	}
 
-	serverTLSConf := &tls.Config{
+	return ca, &tls.Config{
 		Certificates: []tls.Certificate{
 			{
 				Certificate: [][]byte{srvCert},
@@ -51,6 +48,15 @@ func NewTestServer(t *testing.T, handler http.Handler) *Server {
 		},
 		NextProtos: []string{http3.NextProtoH3},
 	}
+}
+
+// NewTestServer creates a new test server with the given handler.
+// It has a self-signed CA and a server certificate.
+// It closes itself on test cleanup.
+func NewTestServer(t *testing.T, handler http.Handler) *Server {
+	t.Helper()
+
+	ca, serverTLSConf := ServerTLSConfig(t, net.IPv4(127, 0, 0, 1))
 
 	srv := &http3.Server{
 		Handler:         handler,
