@@ -2,8 +2,6 @@ package relay
 
 import (
 	"log/slog"
-	"net/netip"
-	"time"
 )
 
 type Option func(*UDPRelay)
@@ -19,14 +17,5 @@ func WithWorkers(workers int) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(r *UDPRelay) {
 		r.logger = logger
-	}
-}
-
-// WithRouteTTL sets the TTL for unused routes.
-// Default is 30 minutes.
-func WithRouteTTL(ttl time.Duration) Option {
-	return func(r *UDPRelay) {
-		r.routes.Close() // stop previous TTLMap goroutine
-		r.routes = NewTTLMap[netip.AddrPort, netip.AddrPort](ttl)
 	}
 }

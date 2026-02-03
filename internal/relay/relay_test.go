@@ -35,7 +35,7 @@ func TestUDPRelay(t *testing.T) {
 	relayAddr := relayConn.LocalAddr().(*net.UDPAddr).AddrPort()
 
 	t.Run("forwards packets", func(t *testing.T) {
-		r := runRelay(t, relayConn, 100*time.Millisecond)
+		r := runRelay(t, relayConn)
 
 		r.AddRoute(
 			clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
@@ -86,19 +86,22 @@ func TestUDPRelay(t *testing.T) {
 	})
 
 	t.Run("route eviction", func(t *testing.T) {
-		r := runRelay(t, relayConn, 50*time.Millisecond)
+		r := runRelay(t, relayConn)
 
 		r.AddRoute(
 			clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 			clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		)
 
-		time.Sleep(100 * time.Millisecond)
-
 		message := []byte("hello, relay!")
 		if _, err := clientAConn.WriteToUDPAddrPort(message, relayAddr); err != nil {
 			t.Errorf("write to relay: %v", err)
 		}
+
+		r.RemoveRoute(
+			clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
+			clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
+		)
 
 		buf := make([]byte, 1500)
 		clientBConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -208,8 +211,8 @@ func TestUDPRelayAllocations(t *testing.T) {
 	}
 }
 
-func runRelay(t *testing.T, relayConn *net.UDPConn, ttl time.Duration) *relay.UDPRelay {
-	r := relay.NewUDPRelay(relay.WithRouteTTL(ttl))
+func runRelay(t *testing.T, relayConn *net.UDPConn) *relay.UDPRelay {
+	r := relay.NewUDPRelay()
 
 	var eg errgroup.Group
 	eg.Go(func() error {

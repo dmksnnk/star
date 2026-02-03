@@ -29,7 +29,8 @@ type UDPRelay struct {
 	bufPool sync.Pool
 	workers int
 
-	routes *TTLMap[netip.AddrPort, netip.AddrPort]
+	routesMu sync.RWMutex
+	routes   map[netip.AddrPort]netip.AddrPort
 
 	done chan struct{}
 
@@ -53,7 +54,7 @@ func NewUDPRelay(opts ...Option) *UDPRelay {
 				return &buf
 			},
 		},
-		routes:  NewTTLMap[netip.AddrPort, netip.AddrPort](30 * time.Minute),
+		routes:  make(map[netip.AddrPort]netip.AddrPort),
 		done:    make(chan struct{}),
 		workers: runtime.NumCPU(),
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -115,8 +116,32 @@ func (r *UDPRelay) ListenUDP(addr *net.UDPAddr) error {
 
 // AddRoute adds a bidirectional route between addresses a and b.
 func (r *UDPRelay) AddRoute(a, b netip.AddrPort) {
-	r.routes.Set(a, b)
-	r.routes.Set(b, a)
+	r.routesMu.Lock()
+	defer r.routesMu.Unlock()
+
+	r.routes[a] = b
+	r.routes[b] = a
+}
+
+func (r *UDPRelay) RemoveRoute(a, b netip.AddrPort) {
+	r.routesMu.Lock()
+	defer r.routesMu.Unlock()
+
+	delete(r.routes, a)
+	delete(r.routes, b)
+}
+
+// RemoveAllRoutes removes all routes associated with address a.
+func (r *UDPRelay) RemoveAllRoutes(a netip.AddrPort) {
+	r.routesMu.Lock()
+	defer r.routesMu.Unlock()
+
+	delete(r.routes, a)
+	for _, dst := range r.routes {
+		if dst == a {
+			delete(r.routes, dst)
+		}
+	}
 }
 
 // Stats returns current relay statistics.
@@ -133,7 +158,6 @@ func (r *UDPRelay) Stats() Stats {
 // For proper shutdown, ensure that all [UDPRelay.Serve] calls have returned after invoking Close.
 func (r *UDPRelay) Close() error {
 	close(r.done)
-	r.routes.Close()
 
 	return nil
 }
@@ -199,7 +223,9 @@ func (r *UDPRelay) readPacketWithTimeout(conn *net.UDPConn, bufp *[]byte) (packe
 func (r *UDPRelay) writePacket(conn *net.UDPConn, pkt packet) error {
 	defer r.bufPool.Put(pkt.bufp)
 
-	dst, ok := r.routes.Get(pkt.addr)
+	r.routesMu.RLock()
+	dst, ok := r.routes[pkt.addr]
+	r.routesMu.RUnlock()
 	if !ok { // drop packet if no route
 		r.logger.Warn("dropping packet with no route", slog.String("addr", pkt.addr.String()), slog.Int("size", pkt.n))
 		r.droppedPackets.Add(1)
