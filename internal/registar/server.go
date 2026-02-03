@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
@@ -29,12 +31,16 @@ const (
 	quicConnContextKey contextKey = "quic-conn"
 )
 
-var errCodeAcceptStream = quic.ApplicationErrorCode(0xABCDEF)
+var (
+	errCodeAcceptStream = quic.ApplicationErrorCode(0xabcdef)
+	errCodePeerClosed   = quic.ApplicationErrorCode(0xabcdf0)
+)
 
 type Registar interface {
 	NewSessionCert(key auth.Key, csr *x509.CertificateRequest) (caCert, cert *x509.Certificate, err error)
-	Host(ctx context.Context, key auth.Key, conn *quic.Conn, addrs AddrPair) error
-	Join(ctx context.Context, key auth.Key, conn *quic.Conn, addrs AddrPair) error
+	Host(ctx context.Context, key auth.Key, peer Peer) error
+	Join(ctx context.Context, key auth.Key, peer Peer) error
+	Close() error
 }
 
 type Server struct {
@@ -63,13 +69,15 @@ func NewServer(registar Registar) *Server {
 
 func (s *Server) Host(w http.ResponseWriter, r *http.Request, key auth.Key) {
 	s.register(w, r, key, func(conn *quic.Conn, addrs AddrPair) error {
-		return s.registar.Host(r.Context(), key, conn, addrs)
+		peer := newPeer(addrs, conn)
+		return s.registar.Host(r.Context(), key, peer)
 	})
 }
 
 func (s *Server) Join(w http.ResponseWriter, r *http.Request, key auth.Key) {
 	s.register(w, r, key, func(conn *quic.Conn, addrs AddrPair) error {
-		return s.registar.Join(r.Context(), key, conn, addrs)
+		peer := newPeer(addrs, conn)
+		return s.registar.Join(r.Context(), key, peer)
 	})
 }
 
@@ -185,6 +193,10 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				if isRemoteConnClosed(err) {
 					return nil
 				}
+				if isLocalPeerClosed(err) {
+					return nil
+				}
+
 				return fmt.Errorf("accept stream: %w", err)
 			}
 
@@ -197,7 +209,7 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 
 	eg.Go(func() error {
 		for {
-			str, err := conn.AcceptUniStream(ctx)
+			str, err := conn.AcceptUniStream(ctx) // control streams
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return nil
@@ -205,6 +217,10 @@ func (s *Server) ServeQUICConn(conn *quic.Conn) error {
 				if isRemoteConnClosed(err) {
 					return nil
 				}
+				if isLocalPeerClosed(err) {
+					return nil
+				}
+
 				return fmt.Errorf("accept unidirectional stream: %w", err)
 			}
 
@@ -256,6 +272,8 @@ func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
 }
 
 func (s *Server) Close() error {
+	s.registar.Close()
+
 	s.ctxCancel()
 
 	err := s.H3.Close()
@@ -297,4 +315,43 @@ func isRemoteConnClosed(err error) bool {
 	return errors.As(err, &appErr) &&
 		appErr.ErrorCode == 0 &&
 		appErr.Remote
+}
+
+func isLocalPeerClosed(err error) bool {
+	var appErr *quic.ApplicationError
+	return errors.As(err, &appErr) &&
+		appErr.ErrorCode == 0 &&
+		!appErr.Remote
+}
+
+type peer struct {
+	addrs      AddrPair
+	controller *control.Controller
+	conn       *quic.Conn
+}
+
+var _ Peer = (*peer)(nil)
+
+func newPeer(addrs AddrPair, conn *quic.Conn) peer {
+	return peer{
+		addrs:      addrs,
+		controller: control.NewController(conn),
+		conn:       conn,
+	}
+}
+
+func (p peer) Addrs() AddrPair {
+	return p.addrs
+}
+
+func (p peer) ConnectTo(ctx context.Context, public, private netip.AddrPort) error {
+	return p.controller.ConnectTo(ctx, public, private)
+}
+
+func (p peer) Context() context.Context {
+	return p.conn.Context()
+}
+
+func (p peer) Close(err error) {
+	p.conn.CloseWithError(errCodePeerClosed, err.Error())
 }
