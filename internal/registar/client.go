@@ -130,9 +130,8 @@ func resolvePath(base *url.URL, sub string) string {
 func newCSR(privateKey *ecdsa.PrivateKey) (*x509.CertificateRequest, error) {
 	template := &x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName: "example.com",
+			CommonName: "star-p2p-peer",
 		},
-		DNSNames: []string{"example.com", "www.example.com"},
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, privateKey)
 	if err != nil {
