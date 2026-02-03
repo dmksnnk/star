@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,17 +15,18 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
+// ErrConnectFailed is returned when attempt to connect to a peer fails.
+var ErrConnectFailed = errors.New("connect failed")
+
 // Controller issues commands.
 type Controller struct {
-	conn *http3.ClientConn
+	conn *quic.Conn
 }
 
 // NewController creates a new controller on a connection to the agent.
 func NewController(conn *quic.Conn) *Controller {
-	tr := &http3.Transport{}
-
 	return &Controller{
-		conn: tr.NewClientConn(conn),
+		conn: conn,
 	}
 }
 
@@ -40,15 +42,44 @@ func (c *Controller) ConnectTo(ctx context.Context, public, private netip.AddrPo
 	if err := json.NewEncoder(&buf).Encode(cmd); err != nil {
 		return fmt.Errorf("encode body: %w", err)
 	}
-	// must set fake host, as http3 requires valid URL with host
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://star/connect-to", &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	resp, err := c.conn.RoundTrip(req)
+	stream, err := c.conn.OpenStreamSync(ctx)
 	if err != nil {
-		return fmt.Errorf("round trip: %w", err)
+		return fmt.Errorf("open stream: %w", err)
+	}
+	defer stream.Close()
+
+	// cancel stream if context is canceled
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+			return
+		case <-done:
+			return
+		}
+	}()
+	defer close(done)
+
+	if err := req.Write(stream); err != nil {
+		return fmt.Errorf("write request: %w", err)
+	}
+
+	// let the other side know that request is complete
+	if err := stream.Close(); err != nil {
+		return fmt.Errorf("close stream after request write: %w", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(stream), req)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -68,6 +99,3 @@ type ConnectCommand struct {
 	PublicAddress  netip.AddrPort `json:"public_address"`
 	PrivateAddress netip.AddrPort `json:"private_address"`
 }
-
-// ErrConnectFailed is returned when attempt to connect to a peer fails.
-var ErrConnectFailed = errors.New("connect failed")
