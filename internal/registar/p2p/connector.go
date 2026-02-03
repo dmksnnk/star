@@ -109,7 +109,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.DebugContext(ctx, "connection established via accept")
+		c.logger.DebugContext(ctx, "connection established via accept", "remote_addr", conn.RemoteAddr().String())
 		return conn, eg.Wait()
 	case conn := <-publicDialled:
 		acceptCancel()
@@ -119,7 +119,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.DebugContext(ctx, "connection established via public dial")
+		c.logger.DebugContext(ctx, "connection established via public dial", "remote_addr", conn.RemoteAddr().String())
 		return conn, nil
 	case conn := <-privateDialled:
 		acceptCancel()
@@ -129,7 +129,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 			return nil, err
 		}
 
-		c.logger.DebugContext(ctx, "connection established via private dial")
+		c.logger.DebugContext(ctx, "connection established via private dial", "remote_addr", conn.RemoteAddr().String())
 		return conn, eg.Wait()
 	case <-ctx.Done():
 		acceptCancel()
@@ -156,7 +156,7 @@ func (c *Connector) acceptLoop(ctx context.Context, listener *quic.EarlyListener
 		}
 
 		state := conn.ConnectionState()
-		if !state.SupportsDatagrams {
+		if !state.SupportsDatagrams.Remote {
 			c.logger.Debug("client has not enabled datagrams")
 			conn.CloseWithError(errcodeCancelled, "datagrams are not enabled")
 			continue
@@ -187,10 +187,7 @@ func (c *Connector) acceptLoop(ctx context.Context, listener *quic.EarlyListener
 
 		select {
 		case accepted <- conn:
-			c.logger.Debug("accepted connection",
-				"local_addr", conn.LocalAddr().String(),
-				"remote_addr", conn.RemoteAddr().String(),
-			)
+			c.logger.Debug("accepted connection", "remote_addr", conn.RemoteAddr().String())
 			return nil
 		case <-ctx.Done():
 			err := fmt.Errorf("accept loop cancelled: %w", context.Cause(ctx))
@@ -211,7 +208,7 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 		}
 
 		state := conn.ConnectionState()
-		if !state.SupportsDatagrams {
+		if !state.SupportsDatagrams.Remote {
 			c.logger.Debug("server has not enabled datagrams")
 			conn.CloseWithError(errcodeCancelled, "datagrams are not enabled")
 			continue
@@ -237,8 +234,7 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 
 		select {
 		case dialled <- conn:
-			c.logger.DebugContext(ctx, "handshake successful",
-				"remote_addr", conn.RemoteAddr().String())
+			c.logger.DebugContext(ctx, "handshake successful", "remote_addr", conn.RemoteAddr().String())
 			return nil
 		case <-ctx.Done():
 			err := fmt.Errorf("dial connection cancelled: %w", context.Cause(ctx))
