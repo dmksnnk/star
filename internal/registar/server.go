@@ -45,7 +45,12 @@ type Registar interface {
 
 type Server struct {
 	// H3 is the HTTP/3 server used to serve registar requests.
+	// Can be additionally configured before serving.
 	H3 *http3.Server
+	// Logger is used for server error logging.
+	// If nil, defaults to slog.Default().
+	// This is separate from H3.Logger which handles HTTP/3 internal logging.
+	Logger *slog.Logger
 
 	registar   Registar
 	ctx        context.Context // is closed when Close is called
@@ -90,8 +95,8 @@ func (s *Server) init() {
 			}
 			return context.WithValue(ctx, quicConnContextKey, c)
 		}
-		if s.H3.Logger == nil {
-			s.H3.Logger = slog.Default()
+		if s.Logger == nil {
+			s.Logger = slog.Default()
 		}
 	})
 }
@@ -165,7 +170,7 @@ func (s *Server) Serve(conn net.PacketConn) error {
 			defer s.connsCount.Done()
 
 			if err := s.ServeQUICConn(qconn); err != nil {
-				s.H3.Logger.ErrorContext(qconn.Context(), "serve http3 connection", "err", err)
+				s.Logger.ErrorContext(qconn.Context(), "serve http3 connection", "err", err)
 			}
 		}()
 	}

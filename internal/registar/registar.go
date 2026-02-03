@@ -11,7 +11,6 @@ import (
 
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -117,7 +116,7 @@ func (r *Registar2) Join(
 			}
 
 			r.relay.AddRoute(host.Addrs().Public, peer.Addrs().Public)
-			if err := initRelay(ctx, host, peer, r.relayAddr); err != nil {
+			if err := initRelay(r.ctx, host, peer, r.relayAddr); err != nil {
 				peer.Close(fmt.Errorf("init relay connection: %w", err))
 				return
 			}
@@ -162,28 +161,62 @@ func initP2P(ctx context.Context, host, peer Peer) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
 	defer cancel()
 
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		return host.ConnectTo(ctx, peer.Addrs().Public, peer.Addrs().Private)
-	})
-	eg.Go(func() error {
-		return peer.ConnectTo(ctx, host.Addrs().Public, host.Addrs().Private)
-	})
+	var hostErr, peerErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		hostErr = host.ConnectTo(ctx, peer.Addrs().Public, peer.Addrs().Private)
+	}()
+	go func() {
+		defer wg.Done()
+		peerErr = peer.ConnectTo(ctx, host.Addrs().Public, host.Addrs().Private)
+	}()
 
-	return eg.Wait()
+	wg.Wait()
+
+	// If either succeeded, P2P worked
+	if hostErr == nil && peerErr == nil {
+		return nil
+	}
+
+	// Both must fail with ErrConnectFailed for P2P to be considered failed
+	if errors.Is(hostErr, control.ErrConnectFailed) && errors.Is(peerErr, control.ErrConnectFailed) {
+		return control.ErrConnectFailed
+	}
+
+	return joinErrors(hostErr, peerErr)
 }
 
 func initRelay(ctx context.Context, host, peer Peer, relayAddr netip.AddrPort) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
 	defer cancel()
 
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		return host.ConnectTo(ctx, relayAddr, relayAddr)
-	})
-	eg.Go(func() error {
-		return peer.ConnectTo(ctx, relayAddr, relayAddr)
-	})
+	var hostErr, peerErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		hostErr = host.ConnectTo(ctx, relayAddr, relayAddr)
+	}()
+	go func() {
+		defer wg.Done()
+		peerErr = peer.ConnectTo(ctx, relayAddr, relayAddr)
+	}()
 
-	return eg.Wait()
+	wg.Wait()
+
+	return joinErrors(hostErr, peerErr)
+}
+
+func joinErrors(hostErr, peerErr error) error {
+	var err error
+	if hostErr != nil {
+		err = fmt.Errorf("host failed to connect: %w", hostErr)
+	}
+	if peerErr != nil {
+		err = errors.Join(err, fmt.Errorf("peer failed to connect: %w", peerErr))
+	}
+
+	return err
 }

@@ -2,6 +2,8 @@ package integrationtest
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -86,22 +88,26 @@ func NewClient(t *testing.T, tr *quic.Transport, srv *http3test.Server, secret [
 	return client
 }
 
-func ServeAgent(t *testing.T, agent *control.Agent, stream *http3.RequestStream) {
-	t.Helper()
-
+func ServeAgent(t *testing.T, agent *control.Agent, conn *quic.Conn) {
 	var eg errgroup.Group
 	eg.Go(func() error {
-		return agent.Serve(stream)
+		return agent.Serve(conn)
 	})
 
 	t.Cleanup(func() {
-		stream.CancelRead(errcode.Cancelled)
-		stream.CancelWrite(errcode.Cancelled)
-
+		conn.CloseWithError(0, "test cleanup")
 		if err := eg.Wait(); err != nil {
-			if !errcode.IsLocalHTTPError(err, errcode.Cancelled) && !errcode.IsLocalStreamError(err, errcode.Cancelled) {
+			if !isLocalClose(err) {
 				t.Errorf("serve agent: %s", err)
 			}
 		}
 	})
+}
+
+func isLocalClose(err error) bool {
+	var appErr *quic.ApplicationError
+	return errors.As(err, &appErr) &&
+		appErr.ErrorCode == 0 &&
+		!appErr.Remote &&
+		appErr.ErrorMessage == "test cleanup"
 }

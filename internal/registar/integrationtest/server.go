@@ -4,10 +4,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/dmksnnk/star/internal/discovery"
@@ -22,6 +24,7 @@ func NewServer(t *testing.T, reg registar.Registar, secret []byte) *Server {
 	t.Helper()
 
 	srv := registar.NewServer(reg)
+	srv.Logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	srv = registar.SetRouter(srv, secret)
 
 	conn := NewLocalUDPConn(t)
