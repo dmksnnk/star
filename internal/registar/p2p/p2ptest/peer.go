@@ -64,7 +64,9 @@ func main() {
 			abort("run client", err)
 		}
 	} else {
-		runServer(ctx, quicConn)
+		if err := runServer(ctx, quicConn); err != nil {
+			abort("run server", err)
+		}
 	}
 
 	slog.Info("peer done")
@@ -101,7 +103,7 @@ func runClient(ctx context.Context, conn *quic.Conn) error {
 		return fmt.Errorf("data differs")
 	}
 
-	return nil
+	return conn.CloseWithError(quic.ApplicationErrorCode(quic.NoError), "done")
 }
 
 func runServer(ctx context.Context, conn *quic.Conn) error {
@@ -128,7 +130,12 @@ func runServer(ctx context.Context, conn *quic.Conn) error {
 		return fmt.Errorf("close stream: %w", err)
 	}
 
-	return nil
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-conn.Context().Done(): // wait for connection to close from client side
+		return nil
+	}
 }
 
 func abort(msg string, err error) {
