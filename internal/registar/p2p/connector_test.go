@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 
 	exitCode := m.Run()
 	if exitCode == 0 {
-		// something is leanking in gont
+		// something is leaking in gont
 		// TODO: figure out if it gont or our code
 		if err := goleak.Find(
 			goleak.IgnoreAnyFunction("github.com/godbus/dbus/v5.(*Conn).inWorker"),

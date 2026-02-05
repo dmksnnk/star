@@ -16,6 +16,7 @@ import (
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -68,14 +69,18 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	}
 	defer earlyListener.Close() // OK to close, as it does not close active connections
 
+	c.logger.DebugContext(ctx, "starting connection attempts",
+		"listen_addr", earlyListener.Addr().String(),
+		"public_addr", public.String(),
+		"private_addr", private.String(),
+	)
+
 	eg, ctx := errgroup.WithContext(ctx)
 
 	accepted := make(chan *quic.Conn)
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
 	defer acceptCancel()
 	eg.Go(func() error {
-		defer close(accepted)
-
 		return c.acceptLoop(acceptCtx, earlyListener, accepted)
 	})
 
@@ -83,8 +88,6 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	publicReqCtx, publicReqCancel := context.WithCancel(ctx)
 	defer publicReqCancel()
 	eg.Go(func() error {
-		defer close(publicDialled)
-
 		return c.dialLoop(publicReqCtx, public, publicDialled)
 	})
 
@@ -94,8 +97,6 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	if public.Compare(private) != 0 {
 		privateDialled = make(chan *quic.Conn) // now it is created
 		eg.Go(func() error {
-			defer close(privateDialled)
-
 			return c.dialLoop(privateReqCtx, private, privateDialled)
 		})
 	}
@@ -110,7 +111,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 		}
 
 		c.logger.DebugContext(ctx, "connection established via accept", "remote_addr", conn.RemoteAddr().String())
-		return conn, eg.Wait()
+		return conn, nil
 	case conn := <-publicDialled:
 		acceptCancel()
 		privateReqCancel()
@@ -130,7 +131,7 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 		}
 
 		c.logger.DebugContext(ctx, "connection established via private dial", "remote_addr", conn.RemoteAddr().String())
-		return conn, eg.Wait()
+		return conn, nil
 	case <-ctx.Done():
 		acceptCancel()
 		publicReqCancel()
@@ -166,7 +167,14 @@ func (c *Connector) acceptLoop(ctx context.Context, listener *quic.EarlyListener
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				c.logger.Debug("read handshake cancelled")
-				return nil
+				conn.CloseWithError(errcodeCancelled, err.Error())
+				continue
+			}
+
+			if isRequestCancelledError(err, true) {
+				c.logger.Debug("request cancelled remotely", "err", err)
+				conn.CloseWithError(errcodeCancelled, err.Error())
+				continue
 			}
 
 			var badReq badRequestError
@@ -198,7 +206,7 @@ func (c *Connector) acceptLoop(ctx context.Context, listener *quic.EarlyListener
 
 func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled chan<- *quic.Conn) error {
 	for {
-		conn, err := c.dial(ctx, addr)
+		conn, err := c.transport.Dial(ctx, net.UDPAddrFromAddrPort(addr), c.tlsConf, c.quicConf)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -217,10 +225,14 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 		ok, err := c.sendHandshake(ctx, conn)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				return conn.CloseWithError(errcodeCancelled, fmt.Sprintf("cancelled: %v", context.Cause(ctx)))
+				conn.CloseWithError(errcodeCancelled, err.Error())
+				continue
 			}
-			if isCancelledStreamError(err) {
-				return conn.CloseWithError(errcodeCancelled, fmt.Sprintf("cancelled: %v", context.Cause(ctx)))
+
+			if isRemoteConflictError(err) {
+				c.logger.DebugContext(ctx, "handshake rejected by peer, retrying")
+				// no need to close conn, as other side has already closed it
+				continue
 			}
 
 			return fmt.Errorf("send handshake to %s: %w", addr, err)
@@ -228,7 +240,7 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 
 		if !ok {
 			c.logger.DebugContext(ctx, "handshake rejected by peer, retrying")
-			conn.CloseWithError(errcodeCancelled, "closing connection after rejection")
+			conn.CloseWithError(errcodeConflict, "closing connection after rejection")
 			continue
 		}
 
@@ -243,15 +255,6 @@ func (c *Connector) dialLoop(ctx context.Context, addr netip.AddrPort, dialled c
 	}
 }
 
-func (c *Connector) dial(ctx context.Context, addr netip.AddrPort) (*quic.Conn, error) {
-	conn, err := c.transport.Dial(ctx, net.UDPAddrFromAddrPort(addr), c.tlsConf, c.quicConf)
-	if err != nil {
-		return nil, fmt.Errorf("dial QUIC: %w", err)
-	}
-
-	return conn, nil
-}
-
 // readHandshake returns true if handshake was successful,
 // false if handshake was rejected. Connection is not closed by this function.
 func (c *Connector) readHandshake(ctx context.Context, conn *quic.Conn) (bool, error) {
@@ -259,13 +262,23 @@ func (c *Connector) readHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("accept stream: %w", err)
 	}
-	defer func() {
-		stream.CancelRead(quic.StreamErrorCode(quic.NoError))
-		stream.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		case <-done:
+		}
 	}()
 
 	req, err := http.ReadRequest(bufio.NewReader(stream))
 	if err != nil {
+		if isRequestRejectedError(err, false) { // context cancelled and we rejected it
+			return false, context.Canceled
+		}
 		return false, fmt.Errorf("read request: %w", err)
 	}
 
@@ -276,13 +289,25 @@ func (c *Connector) readHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 
 	if peerID > c.id {
 		c.logger.Debug("tie-breaking: peer has larger ID, rejecting connection", "our_id", c.id, "peer_id", peerID)
-		return false, nil
+		if err := httpWrite(stream, http.NoBody, http.StatusConflict); err != nil {
+			if isRequestRejectedError(err, false) { // context cancelled and we rejected it
+				return false, context.Canceled
+			}
+			return false, fmt.Errorf("write response: %w", err)
+		}
+		// let other side know we are finished
+		return false, stream.Close()
 	}
 	c.logger.Debug("tie-breaking: accepting connection", "peer_id", peerID)
 
-	httpWrite(stream, http.NoBody, http.StatusOK)
+	if err := httpWrite(stream, http.NoBody, http.StatusOK); err != nil {
+		if isRequestRejectedError(err, false) { // context cancelled and we rejected it
+			return false, context.Canceled
+		}
+		return false, fmt.Errorf("write response: %w", err)
+	}
 
-	return true, nil
+	return true, stream.Close()
 }
 
 // sendHandshake returns true if handshake was successful,
@@ -297,10 +322,6 @@ func (c *Connector) sendHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("open stream: %w", err)
 	}
-	defer func() {
-		stream.CancelRead(quic.StreamErrorCode(quic.NoError))
-		stream.Close()
-	}()
 
 	// cancel stream read when context is cancelled to unblock http.ReadResponse
 	done := make(chan struct{})
@@ -308,24 +329,35 @@ func (c *Connector) sendHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 	go func() {
 		select {
 		case <-ctx.Done():
-			stream.CancelRead(quic.StreamErrorCode(errcodeCancelled))
+			stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
 		case <-done:
 		}
 	}()
 
 	if err := req.Write(stream); err != nil {
+		if isRequestCancelledError(err, false) { // context cancelled, so we cancelled request
+			return false, context.Canceled
+		}
 		return false, fmt.Errorf("write request: %w", err)
+	}
+
+	if err := stream.Close(); err != nil { // let other side know we have finished sending request
+		return false, fmt.Errorf("close stream: %w", err)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(stream), req)
 	if err != nil {
-		if isConflictError(err) {
-			return false, nil
+		if isRequestCancelledError(err, false) { // context cancelled, so we cancelled request
+			return false, context.Canceled
 		}
-
 		return false, fmt.Errorf("read response: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return false, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return false, httpplatform.NewBadStatusCodeError(resp.StatusCode, resp.Body)
@@ -334,20 +366,25 @@ func (c *Connector) sendHandshake(ctx context.Context, conn *quic.Conn) (bool, e
 	return true, nil
 }
 
-func isConflictError(err error) bool {
-	var appErr *quic.ApplicationError
-	if errors.As(err, &appErr) {
-		return appErr.Remote && appErr.ErrorCode == errcodeConflict
-	}
-
-	return false
-}
-
-func isCancelledStreamError(err error) bool {
+func isRequestCancelledError(err error, isRemote bool) bool {
 	var streamErr *quic.StreamError
 	return errors.As(err, &streamErr) &&
-		streamErr.ErrorCode == quic.StreamErrorCode(errcodeCancelled) &&
-		!streamErr.Remote
+		streamErr.ErrorCode == quic.StreamErrorCode(http3.ErrCodeRequestCanceled) &&
+		streamErr.Remote == isRemote
+}
+
+func isRequestRejectedError(err error, isRemote bool) bool {
+	var streamErr *quic.StreamError
+	return errors.As(err, &streamErr) &&
+		streamErr.ErrorCode == quic.StreamErrorCode(http3.ErrCodeRequestRejected) &&
+		streamErr.Remote == isRemote
+}
+
+func isRemoteConflictError(err error) bool {
+	var appErr *quic.ApplicationError
+	return errors.As(err, &appErr) &&
+		appErr.ErrorCode == errcodeConflict &&
+		appErr.Remote
 }
 
 func (c *Connector) newRequest(ctx context.Context) (*http.Request, error) {
@@ -359,13 +396,13 @@ func (c *Connector) newRequest(ctx context.Context) (*http.Request, error) {
 	return req, nil
 }
 
-func httpWrite(w io.Writer, body io.ReadCloser, status int) {
+func httpWrite(w io.Writer, body io.ReadCloser, status int) error {
 	r := http.Response{
 		StatusCode: status,
 		Body:       body,
 	}
 
-	r.Write(w)
+	return r.Write(w)
 }
 
 // Option is a functional option for configuring a Connector.
