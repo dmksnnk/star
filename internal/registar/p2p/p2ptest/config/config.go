@@ -34,7 +34,7 @@ func (c Cert) TLSConfig() (*tls.Config, error) {
 
 	privKey, err := x509.ParsePKCS8PrivateKey(c.PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("parser private key: %w", err)
+		return nil, fmt.Errorf("parse private key: %w", err)
 	}
 
 	return &tls.Config{

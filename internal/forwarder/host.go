@@ -61,7 +61,7 @@ func (h HostConfig) Register(
 
 	cc := registar.ClientConfig{
 		QUICConfig: &quic.Config{
-			KeepAlivePeriod: 10 * time.Second, // // need keep-alive so connection does not close
+			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
 		},
 		TLSConfig: h.TLSConfig.Clone(),
 	}
@@ -83,7 +83,7 @@ func (h HostConfig) Register(
 	return &Host{
 		transport:   tr,
 		control:     clc.ListenControl(ctrlConn, tr, p2pTLSConf),
-		linkConfig:  linkConfig{UDPIdleTimeout: 0}, // newer terminate connection to the game, as we are the host
+		linkConfig:  linkConfig{UDPIdleTimeout: 0}, // never terminate connection to the game, as we are the host
 		logger:      logger,
 		errHandlers: h.ErrHandlers,
 	}, nil
