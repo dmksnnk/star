@@ -92,16 +92,16 @@ func TestUDPRelay(t *testing.T) {
 			clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 			clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		)
-
-		message := []byte("hello, relay!")
-		if _, err := clientAConn.WriteToUDPAddrPort(message, relayAddr); err != nil {
-			t.Errorf("write to relay: %v", err)
-		}
-
 		r.RemoveRoute(
 			clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 			clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		)
+
+		// Send after route removal — packet should be dropped.
+		message := []byte("hello, relay!")
+		if _, err := clientAConn.WriteToUDPAddrPort(message, relayAddr); err != nil {
+			t.Fatalf("write to relay: %v", err)
+		}
 
 		buf := make([]byte, 1500)
 		clientBConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
