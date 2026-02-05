@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
-	"os"
 	"sync"
 	"time"
 
@@ -69,8 +68,7 @@ func (r *RootCA) NewSessionCA() (*SessionCA, error) {
 
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to generate private key: %s\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("generate private key: %w", err)
 	}
 
 	template := x509.Certificate{
