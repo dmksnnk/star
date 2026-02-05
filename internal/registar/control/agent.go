@@ -82,7 +82,7 @@ func (a *Agent) handleStream(stream *quic.Stream) error {
 		return fmt.Errorf("read request: %w", err)
 	}
 
-	// req = req.WithContext(stream.Context())
+	req = req.WithContext(stream.Context())
 
 	var rw responseWriter
 	a.mux.ServeHTTP(&rw, req)

@@ -55,18 +55,11 @@ func (c *Controller) ConnectTo(ctx context.Context, public, private netip.AddrPo
 	defer stream.Close()
 
 	// cancel stream if context is canceled
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
-			stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
-			return
-		case <-done:
-			return
-		}
-	}()
-	defer close(done)
+	stop := context.AfterFunc(ctx, func() {
+		stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+		stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+	})
+	defer stop()
 
 	if err := req.Write(stream); err != nil {
 		return fmt.Errorf("write request: %w", err)
