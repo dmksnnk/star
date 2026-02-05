@@ -6,15 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/p2p"
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
-var errcodeClosed = quic.StreamErrorCode(0x1003)
+var errcodeClosed = quic.ApplicationErrorCode(0x1003)
 
 var errControlListenerClosed = errors.New("control listener closed")
 
@@ -22,17 +22,23 @@ type ControlListenerConfig struct {
 	Logger *slog.Logger
 }
 
-func (c ControlListenerConfig) ListenControl(ctrlStream *http3.RequestStream, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
+func (c ControlListenerConfig) ListenControl(controlConn *quic.Conn, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
 	logger := c.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	connector := p2p.NewConnector(tr, tlsConf, p2p.WithLogger(logger.With(slog.String("component", "p2p.Connector"))))
+	connector := p2p.NewConnector(
+		tr,
+		tlsConf,
+		p2p.WithLogger(logger.With(slog.String("component", "p2p.Connector"))),
+		p2p.WithQuicConfig(&quic.Config{
+			EnableDatagrams: true,
+			KeepAlivePeriod: 10 * time.Second, // need to have keep-alive so link does not close
+		}),
+	)
 	agent := control.NewAgent()
 	conns := make(chan *quic.Conn, 1)
-
-	var eg errgroup.Group
 
 	agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
 		p2pConn, err := connector.Connect(ctx, cmd.PublicAddress, cmd.PrivateAddress)
@@ -53,23 +59,24 @@ func (c ControlListenerConfig) ListenControl(ctrlStream *http3.RequestStream, tr
 		}
 	})
 
+	var eg errgroup.Group
 	eg.Go(func() error {
-		return agent.Serve(ctrlStream)
+		return agent.Serve(controlConn)
 	})
 
 	return &ControlListener{
-		eg:         &eg,
-		ctrlStream: ctrlStream,
-		conns:      conns,
-		done:       make(chan struct{}),
+		eg:       &eg,
+		ctrlConn: controlConn,
+		conns:    conns,
+		done:     make(chan struct{}),
 	}
 }
 
 type ControlListener struct {
-	eg         *errgroup.Group
-	ctrlStream *http3.RequestStream
-	conns      chan *quic.Conn
-	done       chan struct{}
+	eg       *errgroup.Group
+	ctrlConn *quic.Conn
+	conns    chan *quic.Conn
+	done     chan struct{}
 }
 
 // Accept waits for and returns the next incoming peer connection.
@@ -88,7 +95,7 @@ func (l *ControlListener) Accept(ctx context.Context) (*quic.Conn, error) {
 // Close closes the control stream and waits for all underlying goroutines to exit.
 // Accept will immediately unblock and return errControlListenerClosed.
 func (l *ControlListener) Close() error {
-	l.ctrlStream.CancelRead(errcodeClosed)
+	l.ctrlConn.CloseWithError(errcodeClosed, "control listener closed")
 	close(l.done)
 
 	if err := l.eg.Wait(); err != nil {
@@ -103,8 +110,8 @@ func (l *ControlListener) Close() error {
 }
 
 func isLocalCloseError(err error) bool {
-	var h3Err *http3.Error
-	return errors.As(err, &h3Err) &&
-		h3Err.ErrorCode == http3.ErrCode(errcodeClosed) &&
-		!h3Err.Remote
+	var appErr *quic.ApplicationError
+	return errors.As(err, &appErr) &&
+		appErr.ErrorCode == errcodeClosed &&
+		!appErr.Remote
 }
