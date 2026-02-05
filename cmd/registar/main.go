@@ -20,7 +20,6 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/dmksnnk/star/internal/cert"
-	"github.com/dmksnnk/star/internal/discovery"
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
@@ -42,8 +41,6 @@ type listenConfig struct {
 	HTTP string `env:"LISTEN_HTTP" envDefault:":80"`
 	// TLS is the listen address for HTTPS and HTTP/3 connections.
 	TLS string `env:"LISTEN_TLS" envDefault:":443"`
-	// Discovery is the listen address for the address discovery service.
-	Discovery string `env:"LISTEN_DISCOVERY" envDefault:":8000"`
 	// Relay is the listen address for the UDP relay service.
 	Relay string `env:"LISTEN_RELAY" envDefault:":8001"`
 }
@@ -67,29 +64,31 @@ func main() {
 
 	eg, ctx := errgroup.WithContext(ctx)
 
-	discoverySrv := discovery.NewServer()
-
 	relayUDPAddr := resolveUDPAddr(cfg.Listen.Relay)
 	relaySrv := relay.NewUDPRelay(relay.WithLogger(logger.With("component", "relay")))
 
-	registarSvc := registar.NewRegistar2(relayUDPAddr.AddrPort(), relaySrv)
 	rootCA, err := registar.NewRootCA()
 	if err != nil {
 		abort("create root CA", err)
 	}
 
+	caAuthority := registar.NewAuthority(rootCA)
+	registarSvc := registar.NewRegistar2(caAuthority, relayUDPAddr.AddrPort(), relaySrv)
+
 	tlsConf := newTLSConfig(cfg.CertConfig)
 
-	caAuthority := registar.NewAuthority(rootCA)
-	api := registar.NewAPI(registarSvc, caAuthority)
-	router := registar.NewRouter(api, []byte(cfg.Secret))
+	srvHTTP3 := registar.NewServer(registarSvc)
+	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
 	addHealthCheck(router)
 	handler := httpplatform.Wrap(
 		router,
 		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
 		httpplatform.AllowHosts(cfg.CertConfig.Domains),
 	)
-	srvHTTP3 := registar.NewServer(cfg.Listen.TLS, handler, tlsConf)
+	srvHTTP3.H3.Handler = handler
+	srvHTTP3.H3.Addr = cfg.Listen.TLS
+	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
+	srvHTTP3.Logger = logger.With(slog.String("component", "registar"))
 
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
@@ -97,11 +96,11 @@ func main() {
 		Addr: cfg.Listen.TLS,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
-			http3platform.AdvertiseHTTP3(srvHTTP3),
+			http3platform.AdvertiseHTTP3(srvHTTP3.H3),
 			httpplatform.LogRequests(slog.Default()),
 			httpplatform.AllowHosts(cfg.CertConfig.Domains),
 		),
-		TLSConfig: tlsConf,
+		TLSConfig: tlsConf.Clone(),
 	}
 
 	redirectHTTPSSrv := http.Server{
@@ -112,14 +111,6 @@ func main() {
 			httpplatform.AllowHosts(cfg.CertConfig.Domains),
 		),
 	}
-
-	eg.Go(func() error {
-		if err := discoverySrv.Listen(cfg.Listen.Discovery); err != nil {
-			return fmt.Errorf("listen discovery: %w", err)
-		}
-
-		return nil
-	})
 
 	eg.Go(func() error {
 		if err := relaySrv.ListenUDP(relayUDPAddr); err != nil {
@@ -168,7 +159,6 @@ func main() {
 	logger.Info("listening",
 		slog.Group("address",
 			slog.String("http", cfg.Listen.HTTP),
-			slog.String("discovery", cfg.Listen.Discovery),
 			slog.String("relay", cfg.Listen.Relay),
 			slog.String("tls", cfg.Listen.TLS),
 		),
@@ -180,15 +170,11 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := discoverySrv.Close(); err != nil {
-		logger.Error("shutdown discovery server", "error", err)
-	}
-
 	if err := relaySrv.Close(); err != nil {
 		logger.Error("shutdown relay server", "error", err)
 	}
 
-	if err := srvHTTP3.Shutdown(shutdownCtx); err != nil {
+	if err := srvHTTP3.Close(); err != nil {
 		logger.Error("shutdown HTTP/3 server", "error", err)
 	}
 

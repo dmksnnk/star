@@ -4,8 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
-	"net/netip"
 	"net/url"
 	"os"
 
@@ -22,27 +20,25 @@ Commands:
 type commandConfig struct {
 	FS *flag.FlagSet
 
-	Command   string
-	Secret    string
-	Registar  textURL
-	Discovery addrPort
-	Port      int
-	CaCert    string
+	Command  string
+	Secret   string
+	Registar textURL
+	Port     int
+	CaCert   string
 }
 
 func (c *commandConfig) Parse(args []string) error {
 	c.FS = flag.NewFlagSet("star", flag.ExitOnError)
 	c.FS.StringVar(&c.Secret, "secret", "", "secret key (required)")
 	c.FS.TextVar(&c.Registar, "registar", textURL{}, "registar URL")
-	c.FS.TextVar(&c.Discovery, "discovery", addrPort{}, "discovery server address (host:port)")
 	c.FS.IntVar(&c.Port, "port", 0, "port to listen on, if not set, listen on system assigned port")
 	c.FS.StringVar(&c.CaCert, "ca-cert", "", "path to CA certificate for registar")
 	c.FS.Usage = func() {
-		fmt.Fprintln(c.FS.Output()) // just a newline
+		fmt.Fprintln(c.FS.Output()) // newline
 		fmt.Fprintln(c.FS.Output(), "Usage: star [OPTIONS] COMMAND")
 		fmt.Fprintln(c.FS.Output(), commandsUsage)
 
-		fmt.Fprintln(c.FS.Output()) // just a newline
+		fmt.Fprintln(c.FS.Output()) // newline
 		fmt.Fprintln(c.FS.Output(), "Global options:")
 		c.FS.PrintDefaults()
 	}
@@ -59,10 +55,6 @@ func (c *commandConfig) Parse(args []string) error {
 
 	if c.Secret == "" {
 		return errors.New("missing secret")
-	}
-
-	if !c.Discovery.IsValid() {
-		return errors.New("missing discovery server address")
 	}
 
 	if c.Registar.URL == nil {
@@ -154,30 +146,4 @@ func (u textURL) MarshalText() ([]byte, error) {
 		return nil, nil
 	}
 	return []byte(u.String()), nil
-}
-
-type addrPort struct {
-	netip.AddrPort
-}
-
-func (a *addrPort) UnmarshalText(text []byte) error {
-	if len(text) == 0 {
-		return nil
-	}
-
-	udpAddr, err := net.ResolveUDPAddr("udp", string(text))
-	if err != nil {
-		return fmt.Errorf("resolve address %q: %w", text, err)
-	}
-
-	*a = addrPort{udpAddr.AddrPort()}
-	return nil
-}
-
-func (a addrPort) MarshalText() ([]byte, error) {
-	if !a.IsValid() {
-		return nil, nil
-	}
-
-	return []byte(a.String()), nil
 }

@@ -73,7 +73,7 @@ func runHost(ctx context.Context, cfg commandConfig, hostCfg hostConfig, logger 
 		},
 	}
 
-	host, err := fwdCfg.Register(ctx, cfg.Discovery.AddrPort, cfg.Registar.URL, token)
+	host, err := fwdCfg.Register(ctx, cfg.Registar.URL, token)
 	if err != nil {
 		slog.Error("register host", "error", err)
 		os.Exit(1)
@@ -99,7 +99,7 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 		GameListenPort:     peerCfg.GameListenPort,
 	}
 
-	peer, err := fwdCfg.Register(ctx, cfg.Discovery.AddrPort, cfg.Registar.URL, token)
+	peer, err := fwdCfg.Join(ctx, cfg.Registar.URL, token)
 	if err != nil {
 		logger.Error("register peer", "error", err)
 		os.Exit(1)
