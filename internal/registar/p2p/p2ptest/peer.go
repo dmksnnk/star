@@ -53,7 +53,7 @@ func main() {
 	ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	quicConn, err := connector.Connect(ctx, cfg.PeerPrivateAddress, cfg.PeerPublicAddress)
+	quicConn, err := connector.Connect(ctx, cfg.PeerPublicAddress, cfg.PeerPrivateAddress)
 	if err != nil {
 		abort("connector.Connect failed", err)
 	}
