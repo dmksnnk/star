@@ -26,4 +26,4 @@ docker run -it --rm \
     --volume "$(go env GOCACHE):/root/.cache/go-build" \
     --volume "$(go env GOMODCACHE):/go/pkg/mod" \
     stun:0.0.1 \
-    go test -count=1 -v $RUN_ARG github.com/dmksnnk/star/internal/registar/p2p
+    go test -tags=integration -count=1 -v $RUN_ARG github.com/dmksnnk/star/internal/registar/p2p
