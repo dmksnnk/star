@@ -25,7 +25,7 @@ func NewServer(t *testing.T, reg registar.Registar, secret []byte) *Server {
 
 	srv := registar.NewServer(reg)
 	srv.Logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	srv = registar.SetRouter(srv, secret)
+	srv.H3.Handler = registar.NewRouter(srv, secret)
 
 	conn := NewLocalUDPConn(t)
 

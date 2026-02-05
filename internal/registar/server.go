@@ -286,8 +286,8 @@ func (s *Server) Close() error {
 	return err
 }
 
-// SetRouter sets up the HTTP router for the registar server.
-func SetRouter(srv *Server, secret []byte) *Server {
+// NewRouter creates a new HTTP handler for the registar server.
+func NewRouter(srv *Server, secret []byte) *http.ServeMux {
 	hostHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key, _ := auth.KeyFromContext(r.Context())
 
@@ -310,9 +310,7 @@ func SetRouter(srv *Server, secret []byte) *Server {
 		httpplatform.Wrap(joinHandler, authMW),
 	)
 
-	srv.H3.Handler = mux
-
-	return srv
+	return mux
 }
 
 func isRemoteConnClosed(err error) bool {
