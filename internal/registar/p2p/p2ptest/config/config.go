@@ -20,7 +20,7 @@ type Config struct {
 type Cert struct {
 	CACert     []byte
 	Cert       []byte
-	PrivateKey []byte // TODO: encode private key with shared password using PKCS#12
+	PrivateKey []byte
 }
 
 // TLSConfig creates TLS config from raw bytes.

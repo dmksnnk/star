@@ -115,7 +115,7 @@ func (p *Peer) UDPAddr() *net.UDPAddr {
 	return p.gameListener.UDPAddr()
 }
 
-func (p *Peer) AcceptAndLink(ctx context.Context) error { // TODO: handle reconnects
+func (p *Peer) AcceptAndLink(ctx context.Context) error {
 	hostConn, err := p.control.Accept(ctx)
 	if err != nil {
 		return fmt.Errorf("accept peer connection: %w", err)
