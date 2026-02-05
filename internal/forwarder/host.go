@@ -2,257 +2,169 @@ package forwarder
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"sync"
-	"sync/atomic"
+	"time"
 
-	"github.com/dmksnnk/star/internal/errcode"
-	"github.com/dmksnnk/star/internal/platform"
-	"github.com/dmksnnk/star/internal/platform/http3platform"
+	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
-	"github.com/dmksnnk/star/internal/registar/control"
-	"github.com/quic-go/quic-go/http3"
-	"golang.org/x/sync/errgroup"
+	"github.com/quic-go/quic-go"
 )
 
-// PeerConnectionController allows to register a host and forward connections to it.
-type PeerConnectionController interface {
-	control.ConnectionForwarder
-	RegisterHost(ctx context.Context, key auth.Key) (*http3.RequestStream, error)
+var (
+	errcodeFailedToConnect = quic.ApplicationErrorCode(0x1001)
+	errcodeLinkFailed      = quic.ApplicationErrorCode(0x1002)
+)
+
+type HostConfig struct {
+	// Logger specifies an optional logger.
+	// If nil, [slog.Default] will be used.
+	Logger *slog.Logger
+	// TLS config for calling registar.
+	// For tests it should should trust registar's cert
+	TLSConfig *tls.Config
+	// ListenAddr specifies the local UDP address to listen on for incoming QUIC connections.
+	// If the IP field is nil or an unspecified IP address,
+	// HostConfig listens on all available IP addresses of the local system
+	// except multicast IP addresses.
+	// If the Port field is 0, a port number is automatically
+	// chosen.
+	ListenAddr *net.UDPAddr
+	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
+	// before it is used.
+	ConfigureTransport func(*quic.Transport)
+	// ErrHandlers are called when an error occurs when handling links.
+	ErrHandlers []func(error)
 }
 
-// RegisterHost registers a host on the server.
-func RegisterHost(ctx context.Context, client PeerConnectionController, key auth.Key) (*control.Listener, error) {
-	stream, err := client.RegisterHost(ctx, key)
+func (h HostConfig) Register(
+	ctx context.Context,
+	baseURL *url.URL,
+	token auth.Token,
+) (*Host, error) {
+	conn, err := net.ListenUDP("udp", h.ListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("register host: %w", err)
+		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
 
-	conn := http3platform.NewStreamConn(stream)
+	tr := &quic.Transport{
+		Conn: conn,
+	}
+	if h.ConfigureTransport != nil {
+		h.ConfigureTransport(tr)
+	}
 
-	return control.Listen(conn, client, key), nil
+	cc := registar.ClientConfig{
+		QUICConfig: &quic.Config{
+			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
+		},
+		TLSConfig: h.TLSConfig.Clone(),
+	}
+	ctrlConn, p2pTLSConf, err := cc.Host(ctx, tr, baseURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("host p2p: %w", err)
+	}
+
+	logger := h.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("role", "host")
+
+	clc := ControlListenerConfig{
+		Logger: logger.With(slog.String("component", "ControlListener")),
+	}
+
+	return &Host{
+		transport:   tr,
+		control:     clc.ListenControl(ctrlConn, tr, p2pTLSConf),
+		linkConfig:  linkConfig{UDPIdleTimeout: 0}, // never terminate connection to the game, as we are the host
+		logger:      logger,
+		errHandlers: h.ErrHandlers,
+	}, nil
 }
 
-// Host forwards game traffic between a game host and a peer.
 type Host struct {
-	dialer *platform.LocalDialer
-	logger *slog.Logger
+	transport  *quic.Transport
+	control    *ControlListener
+	linkConfig linkConfig
+	wg         sync.WaitGroup
 
+	logger      *slog.Logger
 	errHandlers []func(error)
-
-	mux        sync.Mutex
-	links      map[*link]struct{}
-	linksGroup sync.WaitGroup
-	listeners  map[*control.Listener]struct{}
 }
 
-func NewHost(ops ...HostOption) *Host {
-	h := &Host{
-		dialer:    &platform.LocalDialer{},
-		logger:    slog.Default(),
-		links:     make(map[*link]struct{}),
-		listeners: make(map[*control.Listener]struct{}),
-	}
-	for _, op := range ops {
-		op(h)
-	}
-	return h
-}
-
-// Forward accepts incoming peer streams and forwards them to the game host running on the port.
-// Context is used only to for dialing the game host. To cancel the forwarding, call [Host.Close]
-func (h *Host) Forward(ctx context.Context, listener *control.Listener, port int) error {
-	defer listener.Close()
-	h.trackListener(listener, true)
-	defer h.trackListener(listener, false)
-
+func (h *Host) Run(ctx context.Context, gameAddr *net.UDPAddr) error {
 	for {
-		peerStream, err := listener.AcceptForward()
+		peerConn, err := h.control.Accept(ctx)
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) { // listener closed
+			if errors.Is(err, errControlListenerClosed) {
 				return nil
 			}
-			return fmt.Errorf("accept forward: %w", err)
-		}
-		h.logger.Debug("accepted forward request")
 
-		hostConn, err := h.dialer.DialUDP(ctx, port)
-		if err != nil {
-			return fmt.Errorf("dial UDP: %w", err)
+			return fmt.Errorf("accept peer connection: %w", err)
 		}
-		h.logger.Debug("dialed host", "local_addr", hostConn.LocalAddr().String(), "remote_addr", hostConn.RemoteAddr().String())
 
-		l := newLink(hostConn, peerStream)
-		h.trackLink(l, true)
+		h.logger.Debug("accepted peer connection", "remote_addr", peerConn.RemoteAddr().String())
+
+		h.wg.Add(1)
 		go func() {
-			defer h.trackLink(l, false)
-			err := l.serve(ctx)
-			for _, eh := range h.errHandlers {
-				eh(err)
+			defer h.wg.Done()
+			defer peerConn.CloseWithError(0, "closing connection")
+			defer h.logger.Debug("link finished", "remote_addr", peerConn.RemoteAddr().String())
+
+			if err := linkWithHost(ctx, peerConn, gameAddr, h.linkConfig); err != nil {
+				// Close() called
+				if errors.Is(err, quic.ErrTransportClosed) {
+					return
+				}
+				// context cancelled
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+
+				h.handleError(err)
 			}
 		}()
 	}
 }
 
-func (h *Host) trackListener(l *control.Listener, add bool) {
-	h.mux.Lock()
-	defer h.mux.Unlock()
-
-	if add {
-		h.listeners[l] = struct{}{}
-	} else {
-		delete(h.listeners, l)
-	}
-}
-
-func (h *Host) trackLink(l *link, add bool) {
-	h.mux.Lock()
-	defer h.mux.Unlock()
-
-	if add {
-		h.links[l] = struct{}{}
-		h.linksGroup.Add(1)
-	} else {
-		delete(h.links, l)
-		h.linksGroup.Done()
-	}
-}
-
-// Close the [Host].
-// It closes all listeners and links, and waits for all links to finish.
 func (h *Host) Close() error {
-	h.mux.Lock()
-	// Close all listeners first to avoid new connections
-	var err error
-	for l := range h.listeners {
-		if closeErr := l.Close(); closeErr != nil {
-			err = closeErr
-		}
-	}
+	err := errors.Join(
+		h.control.Close(),
+		// close transport last, otherwise it hangs waiting for client connection
+		h.transport.Close(),
+	)
 
-	for l := range h.links {
-		if closeErr := l.close(); closeErr != nil {
-			err = closeErr
-		}
-	}
-	h.mux.Unlock()
+	h.wg.Wait()
 
-	h.linksGroup.Wait()
 	return err
 }
 
-// link is connection between [net.Conn] and HTTP3 stream
-type link struct {
-	conn   *onceCloseConn
-	stream *http3.RequestStream
-	closed atomic.Bool
-}
-
-func newLink(conn net.Conn, stream *http3.RequestStream) *link {
-	return &link{
-		conn:   &onceCloseConn{Conn: conn},
-		stream: stream,
+func (h *Host) handleError(err error) {
+	for _, handler := range h.errHandlers {
+		handler(err)
 	}
 }
 
-func (c *link) serve(ctx context.Context) error {
-	var eg errgroup.Group
-	eg.Go(func() error {
-		defer c.close()
-		// Close closes the send-direction of the stream.
-		// It does not close the receive-direction of the stream.
-		defer c.stream.Close()
-
-		buf := make([]byte, platform.MTU)
-		for {
-			n, err := c.conn.Read(buf)
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) && c.closed.Load() {
-					c.stream.CancelRead(errcode.Cancelled)
-					return nil // closing
-				}
-				c.stream.CancelRead(errcode.Unknown)
-				return fmt.Errorf("read from connection: %w", err)
-			}
-
-			if err := c.stream.SendDatagram(buf[:n]); err != nil {
-				c.conn.Close()
-				// cancelled in another thread
-				if errcode.IsLocalStreamError(err, errcode.Cancelled) {
-					return nil
-				}
-				return fmt.Errorf("send datagram: %w", err)
-			}
-		}
-	})
-
-	eg.Go(func() error {
-		for {
-			dg, err := c.stream.ReceiveDatagram(ctx)
-			if err != nil {
-				c.conn.Close()
-				// cancelled in another thread
-				if errcode.IsLocalStreamError(err, errcode.Cancelled) {
-					return nil
-				}
-
-				return fmt.Errorf("receive datagram: %w", err)
-			}
-
-			if _, err := c.conn.Write(dg); err != nil {
-				if errors.Is(err, net.ErrClosed) && c.closed.Load() {
-					c.stream.CancelRead(errcode.Cancelled)
-					return nil // closing
-				}
-				c.stream.CancelRead(errcode.Unknown)
-				return fmt.Errorf("write datagram: %w", err)
-			}
-		}
-	})
-
-	return eg.Wait()
-}
-
-func (c *link) close() error {
-	c.closed.Store(true)
-	return c.conn.Close()
-}
-
-// onceCloseConn protects net.Conn from closing it multiple times.
-type onceCloseConn struct {
-	net.Conn
-	once     sync.Once
-	closeErr error
-}
-
-func (oc *onceCloseConn) Close() error {
-	oc.once.Do(oc.close)
-	return oc.closeErr
-}
-
-func (oc *onceCloseConn) close() {
-	oc.closeErr = oc.Conn.Close()
-}
-
-type HostOption func(*Host)
-
-func WithDialer(d *platform.LocalDialer) HostOption {
-	return func(h *Host) {
-		h.dialer = d
+// linkWithHost links incoming QUIC connections from peers to the local UDP game.
+func linkWithHost(ctx context.Context, conn *quic.Conn, gameAddr *net.UDPAddr, lc linkConfig) error {
+	gameConn, err := net.DialUDP("udp", nil, gameAddr)
+	if err != nil {
+		conn.CloseWithError(errcodeFailedToConnect, "dial game UDP failed")
+		return fmt.Errorf("dial game UDP: %w", err)
 	}
-}
+	defer gameConn.Close()
 
-func WithHostLogger(l *slog.Logger) HostOption {
-	return func(h *Host) {
-		h.logger = l
+	if err := lc.link(ctx, gameConn, conn); err != nil {
+		conn.CloseWithError(errcodeLinkFailed, fmt.Sprintf("link with game failed: %s", err))
+		return fmt.Errorf("link with game UDP: %w", err)
 	}
-}
 
-func WithNotifyDisconnect(eh func(error)) HostOption {
-	return func(h *Host) {
-		h.errHandlers = append(h.errHandlers, eh)
-	}
+	return nil
 }

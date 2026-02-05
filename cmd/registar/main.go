@@ -23,26 +23,34 @@ import (
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
-	"github.com/dmksnnk/star/internal/registar/api"
-	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/relay"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
 )
 
 type config struct {
-	Secret           string     `env:"SECRET,required"`
-	ListenAddress    string     `env:"LISTEN_ADDRESS" envDefault:":80"`
-	ListenTLSAddress string     `env:"LISTEN_TLS_ADDRESS" envDefault:":443"`
-	LogLevel         slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
-	CertConfig       certConfig `envPrefix:"CERT_"`
+	Secret     string     `env:"SECRET,required"`
+	LogLevel   slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
+	Listen     listenConfig
+	CertConfig certConfig
+}
+
+type listenConfig struct {
+	// HTTP is the listen address on for HTTP connections to redirect to HTTPS.
+	HTTP string `env:"LISTEN_HTTP" envDefault:":80"`
+	// TLS is the listen address for HTTPS and HTTP/3 connections.
+	TLS string `env:"LISTEN_TLS" envDefault:":443"`
+	// Relay is the listen address for the UDP relay service.
+	Relay string `env:"LISTEN_RELAY" envDefault:":8001"`
 }
 
 type certConfig struct {
-	SelfSigned bool     `env:"SELF_SIGNED" envDefault:"false"`
-	Dir        string   `env:"DIR" envDefault:"certs"`
-	Domains    []string `env:"DOMAINS" envDefault:"localhost"`
-	IPAddress  []net.IP `env:"IP_ADDRESS"`
+	// SelfSigned indicates whether to use a self-signed certificate.
+	SelfSigned bool     `env:"CERT_SELF_SIGNED" envDefault:"false"`
+	Dir        string   `env:"CERT_DIR" envDefault:"certs"`
+	Domains    []string `env:"CERT_DOMAINS" envDefault:"localhost"`
+	IPAddress  []net.IP `env:"CERT_IP_ADDRESS"`
 }
 
 func main() {
@@ -50,65 +58,68 @@ func main() {
 	defer close()
 
 	cfg := parseConfig()
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 
-	slog.LogAttrs(ctx, slog.LevelDebug, "load config", slog.Any("config", cfg))
+	logger.DebugContext(ctx, "load config", slog.Any("config", cfg))
 
-	svc := registar.New()
-	svc.NotifyPeerConnected(func(k auth.Key, peerID string) {
-		slog.Info("peer connected",
-			slog.String("key", k.String()),
-			slog.String("peer_id", peerID),
-		)
-	})
-	svc.NotifyPeerDisconnected(func(k auth.Key, peerID string, reason error) {
-		slog.Info("peer disconnected",
-			slog.String("key", k.String()),
-			slog.String("peer_id", peerID),
-			slog.String("error", errString(reason)),
-		)
-	})
-	svc.NotifyHostDisconnected(func(k auth.Key, reason error) {
-		slog.Info("host disconnected",
-			slog.String("key", k.String()),
-			slog.String("error", errString(reason)),
-		)
-	})
+	eg, ctx := errgroup.WithContext(ctx)
+
+	relayUDPAddr := resolveUDPAddr(cfg.Listen.Relay)
+	relaySrv := relay.NewUDPRelay(relay.WithLogger(logger.With("component", "relay")))
+
+	rootCA, err := registar.NewRootCA()
+	if err != nil {
+		abort("create root CA", err)
+	}
+
+	caAuthority := registar.NewAuthority(rootCA)
+	registarSvc := registar.NewRegistar2(caAuthority, relayUDPAddr.AddrPort(), relaySrv)
 
 	tlsConf := newTLSConfig(cfg.CertConfig)
 
-	mux := api.NewRouter(api.New(svc), []byte(cfg.Secret))
-	addHealthCheck(mux)
+	srvHTTP3 := registar.NewServer(registarSvc)
+	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
+	addHealthCheck(router)
 	handler := httpplatform.Wrap(
-		mux,
-		httpplatform.LogRequests(slog.Default()),
+		router,
+		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
 		httpplatform.AllowHosts(cfg.CertConfig.Domains),
 	)
-	srvHTTP3 := api.NewServer(cfg.ListenTLSAddress, handler, tlsConf)
+	srvHTTP3.H3.Handler = handler
+	srvHTTP3.H3.Addr = cfg.Listen.TLS
+	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
+	srvHTTP3.Logger = logger.With(slog.String("component", "registar"))
 
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
 	advertiseHTTP3Srv := http.Server{
-		Addr: cfg.ListenTLSAddress,
+		Addr: cfg.Listen.TLS,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
-			http3platform.AdvertiseHTTP3(srvHTTP3),
+			http3platform.AdvertiseHTTP3(srvHTTP3.H3),
 			httpplatform.LogRequests(slog.Default()),
 			httpplatform.AllowHosts(cfg.CertConfig.Domains),
 		),
-		TLSConfig: tlsConf,
+		TLSConfig: tlsConf.Clone(),
 	}
 
 	redirectHTTPSSrv := http.Server{
-		Addr: cfg.ListenAddress,
+		Addr: cfg.Listen.HTTP,
 		Handler: httpplatform.Wrap(
-			httpplatform.RedirectHTTPS(cfg.ListenTLSAddress),
-			httpplatform.LogRequests(slog.Default()),
+			httpplatform.RedirectHTTPS(cfg.Listen.TLS),
+			httpplatform.LogRequests(logger.With(slog.String("component", "redirect_https"))),
 			httpplatform.AllowHosts(cfg.CertConfig.Domains),
 		),
 	}
 
-	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		if err := relaySrv.ListenUDP(relayUDPAddr); err != nil {
+			return fmt.Errorf("listen relay: %w", err)
+		}
+
+		return nil
+	})
+
 	eg.Go(func() error {
 		if err := srvHTTP3.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
@@ -120,6 +131,7 @@ func main() {
 
 		return nil
 	})
+
 	eg.Go(func() error {
 		if err := advertiseHTTP3Srv.ListenAndServeTLS("", ""); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
@@ -131,6 +143,7 @@ func main() {
 
 		return nil
 	})
+
 	eg.Go(func() error {
 		if err := redirectHTTPSSrv.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
@@ -143,28 +156,38 @@ func main() {
 		return nil
 	})
 
-	slog.Info("listening", "address", cfg.ListenAddress, "tls_address", cfg.ListenTLSAddress)
+	logger.Info("listening",
+		slog.Group("address",
+			slog.String("http", cfg.Listen.HTTP),
+			slog.String("relay", cfg.Listen.Relay),
+			slog.String("tls", cfg.Listen.TLS),
+		),
+	)
 
 	<-ctx.Done()
 
-	slog.Info("shutting down")
+	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := srvHTTP3.Shutdown(shutdownCtx); err != nil {
-		slog.Error("shutdown HTTP/3 server", "error", err)
+	if err := relaySrv.Close(); err != nil {
+		logger.Error("shutdown relay server", "error", err)
+	}
+
+	if err := srvHTTP3.Close(); err != nil {
+		logger.Error("shutdown HTTP/3 server", "error", err)
 	}
 
 	if err := advertiseHTTP3Srv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("shutdown HTTPS server", "error", err)
+		logger.Error("shutdown HTTPS server", "error", err)
 	}
 
 	if err := redirectHTTPSSrv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("shutdown HTTP server", "error", err)
+		logger.Error("shutdown HTTP server", "error", err)
 	}
 
 	if err := eg.Wait(); err != nil {
-		slog.Error("shutdown", "error", err)
+		logger.Error("shutdown", "error", err)
 		os.Exit(1)
 	}
 }
@@ -180,12 +203,20 @@ func parseConfig() config {
 	return cfg
 }
 
+func resolveUDPAddr(address string) *net.UDPAddr {
+	udpAddr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		abort(fmt.Sprintf("resolve UDP address %q", address), err)
+	}
+
+	return udpAddr
+}
+
 func newTLSConfig(cfg certConfig) *tls.Config {
 	if cfg.SelfSigned {
 		tlsConf, err := selfSigned(cfg)
 		if err != nil {
-			slog.Error("create self signed cert", "error", err)
-			os.Exit(1)
+			abort("create self signed cert", err)
 		}
 
 		return tlsConf
@@ -267,10 +298,7 @@ func addHealthCheck(mux *http.ServeMux) {
 	})
 }
 
-func errString(err error) string {
-	if err == nil {
-		return "<nil>"
-	}
-
-	return err.Error()
+func abort(msg string, err error) {
+	slog.Error(msg, "error", err)
+	os.Exit(1)
 }

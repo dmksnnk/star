@@ -2,19 +2,17 @@ package udp_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/platform"
 	"github.com/dmksnnk/star/internal/platform/udp"
 	"go.uber.org/goleak"
 )
@@ -24,12 +22,14 @@ func TestMain(m *testing.M) {
 }
 
 func TestUDPConn(t *testing.T) {
+	// cannot use nettest.TestConn because it is UDP is datagram-oriented, not stream-oriented
+	// and other part of the connection won't receive FIN packet.
 	t.Run("simple", func(t *testing.T) {
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 
 		for i := range 10 {
 			msg := []byte("hello " + strconv.Itoa(i))
-			_, err := stcConn.Write(msg)
+			_, err := stdConn.Write(msg)
 			if err != nil {
 				t.Fatalf("failed to write to c1: %v", err)
 			}
@@ -46,7 +46,7 @@ func TestUDPConn(t *testing.T) {
 	})
 
 	t.Run("ping pong", func(t *testing.T) {
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 		var wg sync.WaitGroup
 		var start uint64 = 0
 
@@ -81,7 +81,7 @@ func TestUDPConn(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			pingPonger(stcConn)
+			pingPonger(stdConn)
 		}()
 		go func() {
 			defer wg.Done()
@@ -89,7 +89,7 @@ func TestUDPConn(t *testing.T) {
 		}()
 
 		// start chain
-		if _, err := stcConn.Write(binary.LittleEndian.AppendUint64(nil, start)); err != nil {
+		if _, err := stdConn.Write(binary.LittleEndian.AppendUint64(nil, start)); err != nil {
 			t.Fatalf("failed to write: %v", err)
 		}
 
@@ -99,14 +99,14 @@ func TestUDPConn(t *testing.T) {
 	t.Run("racy read", func(t *testing.T) {
 		data := make([]byte, 1<<20)
 		rand.Read(data)
-		stcConn, customConn := testPipe(t)
+		stdConn, customConn := testPipe(t)
 
 		var wg sync.WaitGroup
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := copyBuffer(stcConn, bytes.NewReader(data)); err != nil {
+			if err := copyBuffer(stdConn, bytes.NewReader(data)); err != nil {
 				t.Errorf("failed to write to stcConn: %v", err)
 			}
 		}()
@@ -124,7 +124,7 @@ func TestUDPConn(t *testing.T) {
 					copy(b1, b2) // Mutate b1 to trigger potential race
 					if err != nil {
 						// timeout is expected here, as we set a short deadline
-						if !errors.Is(err, context.DeadlineExceeded) {
+						if !errors.Is(err, os.ErrDeadlineExceeded) {
 							t.Error("failed to read from customConn:", err)
 						}
 						customConn.SetReadDeadline(time.Now().Add(time.Millisecond))
@@ -137,11 +137,10 @@ func TestUDPConn(t *testing.T) {
 	})
 
 	t.Run("racy write", func(t *testing.T) {
-		l, stdConn, customConn, err := pipe()
+		stdConn, customConn, err := udp.Pipe()
 		if err != nil {
 			t.Fatalf("failed to create pipe: %v", err)
 		}
-		defer l.Close()
 
 		var wg sync.WaitGroup
 
@@ -163,7 +162,7 @@ func TestUDPConn(t *testing.T) {
 					copy(b1, b2) // Mutate b1 to trigger potential race
 					if err != nil {
 						// timeout is expected here, as we set a short deadline
-						if !errors.Is(err, context.DeadlineExceeded) {
+						if !errors.Is(err, os.ErrDeadlineExceeded) {
 							t.Error("failed to write to customConn:", err)
 						}
 						customConn.SetWriteDeadline(time.Now().Add(time.Millisecond))
@@ -193,13 +192,13 @@ func TestUDPConn(t *testing.T) {
 
 		customConn.SetDeadline(time.Now().Add(-time.Millisecond))
 		_, err := customConn.Write([]byte("hello"))
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("expected deadline exceeded error, got: %v", err)
 		}
 
 		buf := make([]byte, 5)
 		_, err = customConn.Read(buf)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("expected deadline exceeded error, got: %v", err)
 		}
 	})
@@ -237,54 +236,12 @@ func TestUDPConn(t *testing.T) {
 }
 
 func testPipe(t *testing.T) (net.Conn, net.Conn) {
-	l, stcConn, customConn, err := pipe()
+	stcConn, customConn, err := udp.Pipe()
 	if err != nil {
 		t.Fatalf("failed to create pipe: %v", err)
 	}
-	registerCleanup(t, stcConn, customConn, l)
+	registerCleanup(t, stcConn, customConn)
 	return stcConn, customConn
-}
-
-func pipe() (net.Listener, net.Conn, net.Conn, error) {
-	localhost := &net.UDPAddr{
-		IP:   net.IPv4(127, 0, 0, 1),
-		Port: 0, // let the system choose a free port
-	}
-	llc := &udp.ListenConfig{}
-	listener, err := llc.Listen(context.TODO(), localhost)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to listen UDP: %v", err)
-	}
-
-	ld := &platform.LocalDialer{}
-	stdConn, err := ld.DialUDP(context.TODO(), listener.Addr().(*net.UDPAddr).Port)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to dial UDP: %w", err)
-	}
-
-	handshake := "hello"
-	_, err = stdConn.Write([]byte(handshake))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to write to UDP connection: %w", err)
-	}
-
-	custom, err := listener.Accept()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to accept UDP connection: %w", err)
-	}
-
-	buf := make([]byte, len(handshake))
-	n, err := custom.Read(buf)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read from UDP connection: %w", err)
-	}
-
-	res := string(buf[:n])
-	if res != handshake {
-		return nil, nil, nil, fmt.Errorf("handshake failed, expected: %s, got: %s", handshake, res)
-	}
-
-	return listener, stdConn, custom, nil
 }
 
 // avoid stdConn to implement [io.WriterTo]
@@ -295,11 +252,8 @@ func copyBuffer(w io.Writer, r io.Reader) error {
 	return err
 }
 
-func registerCleanup(t *testing.T, stdConn, custom net.Conn, listener net.Listener) {
+func registerCleanup(t *testing.T, stdConn, custom net.Conn) {
 	t.Cleanup(func() {
-		if err := listener.Close(); err != nil {
-			t.Errorf("failed to close listener: %v", err)
-		}
 		if err := stdConn.Close(); err != nil {
 			t.Errorf("failed to close std conn: %v", err)
 		}

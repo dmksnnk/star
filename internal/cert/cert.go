@@ -48,8 +48,8 @@ func NewCert(ca *x509.Certificate, caPrivateKey crypto.PrivateKey, req *x509.Cer
 	return certBytes, nil
 }
 
-// NewCert generates a new certificate for the given IP address signed by the given CA.
-func NewIPCert(ca *x509.Certificate, caPrivateKey crypto.PrivateKey, ip net.IP, pubKey crypto.PublicKey) ([]byte, error) {
+// NewIPCert generates a new certificate for the given IP address signed by the given CA.
+func NewIPCert(ca *x509.Certificate, caPrivateKey crypto.PrivateKey, pubKey crypto.PublicKey, ips ...net.IP) ([]byte, error) {
 	serialNumber, err := newSerialNumber()
 	if err != nil {
 		return nil, fmt.Errorf("generate serial number: %w", err)
@@ -65,7 +65,7 @@ func NewIPCert(ca *x509.Certificate, caPrivateKey crypto.PrivateKey, ip net.IP, 
 		BasicConstraintsValid: true,
 
 		// SANs
-		IPAddresses: []net.IP{ip},
+		IPAddresses: ips,
 	}
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &template, ca, pubKey, caPrivateKey)

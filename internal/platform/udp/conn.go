@@ -3,6 +3,7 @@ package udp
 
 import (
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -73,7 +74,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 
 	select {
 	case <-dl.Done():
-		return 0, dl.Err()
+		return 0, os.ErrDeadlineExceeded
 	case data := <-c.reads:
 		return copy(p, data), nil
 	case <-c.done:
@@ -91,7 +92,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 
 	select {
 	case <-dl.Done():
-		return 0, dl.Err()
+		return 0, os.ErrDeadlineExceeded
 	case <-c.done:
 		return 0, net.ErrClosed
 	default:

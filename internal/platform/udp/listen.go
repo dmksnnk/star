@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -24,26 +23,30 @@ const (
 
 // ListenConfig implements stream-oriented connection on the top of UDP.
 type ListenConfig struct {
-	// ListenConfig is a configuration for listening on a UDP address.
-	ListenConfig net.ListenConfig
-	// ConnBacklog is a maximum number of connections waiting for accepting.
-	// Default value is 128.
-	// If the backlog is exceeded, ErrListenQueueExceeded error will be returned.
+	// ConnBacklog is the maximum number of connections waiting to be accepted.
+	// The default value is 128.
+	// If the backlog is exceeded, [ErrListenQueueExceeded] will be returned.
 	ConnBacklog int
-	// ReadBufferSize is a size of a buffer for read packets on a single connection.
-	// If nothing is reading from the connection and buffer is full,
-	// packets will be dropped with ErrReadBufferExceeded error.
+	// ReadBufferSize is the size of the buffer for reading packets on a single connection.
+	// If nothing is reading from the connection and the buffer is full,
+	// packets will be dropped with [ErrReadBufferExceeded].
+	// This ensures that one blocked reader doesn't block accepting new connections
+	// or reading from other connections.
 	ReadBufferSize int
-	// Logger is used to log errors on listener.
+	// Logger is used to log errors on the listener.
 	// If nil, [slog.Default] will be used.
 	Logger *slog.Logger
 }
 
 // Listen creates a new UDP listener with the specified address.
-// The ctx argument is used while resolving the address on which to listen;
-// it does not affect the returned Listener.
-func (l ListenConfig) Listen(ctx context.Context, addr *net.UDPAddr) (net.Listener, error) {
-	conn, err := l.ListenConfig.ListenPacket(ctx, addr.Network(), addr.String())
+//
+// If the IP field of addr is nil or an unspecified IP address,
+// Listen listens on all available IP addresses of the local system
+// except multicast IP addresses.
+// If the Port field of addr is 0, a port number is automatically
+// chosen.
+func (l ListenConfig) Listen(addr *net.UDPAddr) (*Listener, error) {
+	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +78,21 @@ func (l ListenConfig) Listen(ctx context.Context, addr *net.UDPAddr) (net.Listen
 	return lis, nil
 }
 
+// Listen is a convenience function to create a UDP listener with default configuration.
+// See [ListenConfig] for more details.
+func Listen(addr *net.UDPAddr) (*Listener, error) {
+	return ListenConfig{}.Listen(addr)
+}
+
 // Listener listens for incoming packets.
 // Implements [net.Listener] interface
 type Listener struct {
-	conn        net.PacketConn
+	conn        *net.UDPConn
 	acceptQueue chan *Conn
 	done        chan struct{}
 
 	readBufferSize int
-	readDone       chan struct{}
+	readDone       chan struct{} // closed when readLoop exits with error
 	readErr        atomic.Value
 
 	conns    map[string]*Conn
@@ -98,7 +107,7 @@ func (l *Listener) readLoop() {
 	defer close(l.readDone)
 
 	for {
-		buf := make([]byte, platform.MTU)
+		buf := make([]byte, platform.MTU) // TODO: use sync.Pool
 		n, addr, err := l.conn.ReadFrom(buf)
 		if err != nil {
 			l.readErr.Store(err)
@@ -106,7 +115,7 @@ func (l *Listener) readLoop() {
 		}
 
 		if err := l.dispatch(addr, buf[:n]); err != nil {
-			l.logger.Error("can't dispatch packet", "error", err, "address", addr.String())
+			l.logger.Error("can't dispatch packet", "error", err, "addr", addr.String())
 		}
 	}
 }
@@ -120,11 +129,15 @@ func (l *Listener) dispatch(addr net.Addr, packet []byte) error {
 		select {
 		case conn.reads <- packet:
 			return nil
-		case <-l.done:
-			return ErrClosedListener
 		default:
 			return ErrReadBufferExceeded
 		}
+	}
+
+	select {
+	case <-l.done:
+		return ErrClosedListener
+	default:
 	}
 
 	// conn not found, create new one
@@ -161,6 +174,7 @@ func (l *Listener) dispatch(addr net.Addr, packet []byte) error {
 }
 
 // Accept waits for and returns the next connection to the listener.
+// Returns [ErrClosedListener] when listener is closed.
 func (l *Listener) Accept() (net.Conn, error) {
 	select {
 	case conn := <-l.acceptQueue:
@@ -177,9 +191,15 @@ func (l *Listener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
 
+// UDPAddr returns the listener's network address as *net.UDPAddr.
+func (l *Listener) UDPAddr() *net.UDPAddr {
+	return l.conn.LocalAddr().(*net.UDPAddr)
+}
+
 // Close closes the listener.
 // Any blocked [Listener.Accept] operations will be unblocked and return ErrClosedListener.
-// But, it will still process incoming reads as connections until there are no connections left.
+// Already accepted connections are not closed.
+// Underlying [net.PacketConn] is closed when there are no accepted connections left.
 func (l *Listener) Close() error {
 	// lock to not add new connections and avoid races on multiple calls to close
 	l.connLock.Lock()
