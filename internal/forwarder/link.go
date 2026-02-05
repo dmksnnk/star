@@ -12,13 +12,26 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
+const defaultUDPIdleTimeout = 10 * time.Second
+
+// errLinkIdleTimeout is returned when no data has been received for the configured idle timeout.
+var errLinkIdleTimeout = errors.New("idle timeout exceeded")
+
+// linkConfig configures a bidirectional UDP-QUIC link.
+type linkConfig struct {
+	// UDPIdleTimeout is the maximum duration without receiving UDP data
+	// before the link is considered idle and terminated.
+	// Zero means no idle timeout.
+	UDPIdleTimeout time.Duration
+}
+
+func (lc linkConfig) link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
 		buf := make([]byte, 1500)
 		for {
-			n, err := read(ctx, udpConn, buf)
+			n, err := lc.read(ctx, udpConn, buf)
 			if err != nil {
 				return fmt.Errorf("read from udp conn: %w", err)
 			}
@@ -45,14 +58,19 @@ func link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
 	return eg.Wait()
 }
 
-func read(ctx context.Context, conn net.Conn, buf []byte) (int, error) {
+func (lc linkConfig) read(ctx context.Context, conn net.Conn, buf []byte) (int, error) {
 	defer func() {
 		_ = conn.SetReadDeadline(time.Time{})
 	}()
 
+	lastRead := time.Now()
 	for {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
+		}
+
+		if lc.UDPIdleTimeout > 0 && time.Since(lastRead) > lc.UDPIdleTimeout {
+			return 0, errLinkIdleTimeout
 		}
 
 		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))

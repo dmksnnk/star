@@ -3,7 +3,6 @@ package forwarder
 import (
 	"context"
 	"crypto"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -13,8 +12,8 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/cert"
+	"github.com/dmksnnk/star/internal/platform/quictest"
 	"github.com/dmksnnk/star/internal/platform/udp"
-	"github.com/quic-go/quic-go"
 	"go.uber.org/goleak"
 	"golang.org/x/sync/errgroup"
 )
@@ -45,13 +44,18 @@ func TestMain(m *testing.M) {
 
 func TestLink(t *testing.T) {
 	udpSrv, udpClient := localUDPPipe(t)
-	quicSrv, quicClient := localQUICPipe(t)
+	quicSrv, quicClient := quictest.Pipe(t)
+	t.Cleanup(func() {
+		quicClient.CloseWithError(0, "test cleanup")
+		quicSrv.CloseWithError(0, "test cleanup")
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		err := link(ctx, udpSrv, quicSrv)
+		lc := linkConfig{}
+		err := lc.link(ctx, udpSrv, quicSrv)
 		if !errors.Is(err, context.Canceled) { // expecting context canceled error
 			return fmt.Errorf("link udpSrv and quicSrv: %w", err)
 		}
@@ -94,6 +98,44 @@ func TestLink(t *testing.T) {
 	}
 }
 
+func TestLinkIdleTimeout(t *testing.T) {
+	udpSrv, udpClient := localUDPPipe(t)
+	quicSrv, quicClient := quictest.Pipe(t)
+	t.Cleanup(func() {
+		quicClient.CloseWithError(0, "test cleanup")
+		quicSrv.CloseWithError(0, "test cleanup")
+	})
+
+	ctx := t.Context()
+
+	lc := linkConfig{UDPIdleTimeout: 200 * time.Millisecond}
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return lc.link(ctx, udpSrv, quicSrv)
+	})
+
+	// Verify link works by sending data through.
+	if _, err := udpClient.Write([]byte("hello")); err != nil {
+		t.Fatalf("write to UDP client: %s", err)
+	}
+
+	dg, err := quicClient.ReceiveDatagram(ctx)
+	if err != nil {
+		t.Fatalf("receive datagram on QUIC client: %s", err)
+	}
+
+	if string(dg) != "hello" {
+		t.Errorf("unexpected datagram, want: %q, got: %q", "hello", string(dg))
+	}
+
+	// Stop sending on UDP side, wait for idle timeout.
+	err = eg.Wait()
+	if !errors.Is(err, errLinkIdleTimeout) {
+		t.Fatalf("expected errLinkIdleTimeout, got: %v", err)
+	}
+}
+
 func localUDPPipe(t *testing.T) (net.Conn, net.Conn) {
 	t.Helper()
 
@@ -111,95 +153,4 @@ func localUDPPipe(t *testing.T) (net.Conn, net.Conn) {
 	})
 
 	return c1, c2
-}
-
-func newTLSConfig(t *testing.T, ips ...net.IP) (server *tls.Config, client *tls.Config) {
-	privkey, err := cert.NewPrivateKey()
-	if err != nil {
-		t.Fatal("create server private key:", err)
-	}
-	certBytes, err := cert.NewIPCert(ca, caPrivateKey, privkey.Public(), ips...)
-	if err != nil {
-		t.Fatalf("create IP cert: %s", err)
-	}
-
-	pool := x509.NewCertPool()
-	pool.AddCert(ca)
-
-	return &tls.Config{
-			Certificates: []tls.Certificate{
-				{
-					Certificate: [][]byte{certBytes},
-					PrivateKey:  privkey,
-				},
-			},
-			RootCAs: pool,
-		},
-		&tls.Config{
-			RootCAs: pool,
-		}
-}
-
-func localQUICPipe(t *testing.T) (*quic.Conn, *quic.Conn) {
-	t.Helper()
-
-	quicCfg := &quic.Config{
-		EnableDatagrams: true,
-	}
-
-	srvUDPConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen udp conn1: %s", err)
-	}
-	t.Cleanup(func() {
-		if err := srvUDPConn.Close(); err != nil {
-			t.Errorf("close server UDP conn: %s", err)
-		}
-	})
-
-	srvConf, cliConf := newTLSConfig(t, srvUDPConn.LocalAddr().(*net.UDPAddr).IP)
-
-	srv, err := quic.Listen(srvUDPConn, srvConf, quicCfg)
-	if err != nil {
-		t.Fatal("listen quic:", err)
-	}
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Errorf("close quic server: %s", err)
-		}
-	})
-
-	var eg errgroup.Group
-	var srvConn *quic.Conn
-	eg.Go(func() error {
-		var err error
-		srvConn, err = srv.Accept(context.TODO())
-		return err
-	})
-
-	clientUDPConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatalf("listen udp conn2: %s", err)
-	}
-	t.Cleanup(func() {
-		if err := clientUDPConn.Close(); err != nil {
-			t.Errorf("close client UDP conn: %s", err)
-		}
-	})
-
-	cliConn, err := quic.Dial(context.TODO(), clientUDPConn, srvUDPConn.LocalAddr(), cliConf, quicCfg)
-	if err != nil {
-		t.Fatal("dial quic:", err)
-	}
-	t.Cleanup(func() {
-		if err := cliConn.CloseWithError(0, "test done"); err != nil {
-			t.Errorf("close quic client: %s", err)
-		}
-	})
-
-	if err := eg.Wait(); err != nil {
-		t.Fatal("accept quic conn:", err)
-	}
-
-	return srvConn, cliConn
 }
