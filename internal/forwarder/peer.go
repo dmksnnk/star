@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"net/url"
+	"time"
 
 	"github.com/dmksnnk/star/internal/platform/udp"
 	"github.com/dmksnnk/star/internal/registar"
@@ -36,20 +36,21 @@ type PeerConfig struct {
 	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
 	// before it is used.
 	ConfigureTransport func(*quic.Transport)
+	// UDPIdleTimeout is the maximum duration without receiving UDP data
+	// from the game before the game connection is considered idle and terminated.
+	// If zero, defaults to 10s.
+	UDPIdleTimeout time.Duration
 }
 
-func (p PeerConfig) Register(
+func (p PeerConfig) Join(
 	ctx context.Context,
-	discoverySrv netip.AddrPort,
 	baseURL *url.URL,
 	token auth.Token,
 ) (*Peer, error) {
-	conn, localAddr, publicAddr, err := DiscoverConn(ctx, p.RegistarListenAddr, discoverySrv)
+	conn, err := net.ListenUDP("udp", p.RegistarListenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("discover connection: %w", err)
+		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
-
-	p.Logger.DebugContext(ctx, "discovered addresses", slog.String("local", localAddr.String()), slog.String("public", publicAddr.String()))
 
 	tr := &quic.Transport{
 		Conn: conn,
@@ -58,18 +59,15 @@ func (p PeerConfig) Register(
 		p.ConfigureTransport(tr)
 	}
 
-	client, err := registar.RegisterClient(ctx, tr, p.TLSConfig, baseURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("register registar client: %w", err)
+	cc := registar.ClientConfig{
+		QUICConfig: &quic.Config{
+			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
+		},
+		TLSConfig: p.TLSConfig.Clone(),
 	}
-
-	peerAddrs := registar.AddrPair{
-		Public:  publicAddr,
-		Private: localAddr,
-	}
-	controlStream, err := client.Join(ctx, peerAddrs)
+	ctrlConn, p2pTLSConf, err := cc.Join(ctx, tr, baseURL, token)
 	if err != nil {
-		return nil, fmt.Errorf("create peer stream: %w", err)
+		return nil, fmt.Errorf("join p2p: %w", err)
 	}
 
 	logger := p.Logger
@@ -89,23 +87,25 @@ func (p PeerConfig) Register(
 		Logger: logger.With(slog.String("component", "ControlListener")),
 	}
 
+	udpIdleTimeout := p.UDPIdleTimeout
+	if udpIdleTimeout == 0 {
+		udpIdleTimeout = defaultUDPIdleTimeout
+	}
+
 	return &Peer{
 		transport:    tr,
-		client:       client,
-		control:      clc.ListenControl(controlStream, tr, client.TLSConfig()),
+		control:      clc.ListenControl(ctrlConn, tr, p2pTLSConf),
 		gameListener: gameListener,
+		linkConfig:   linkConfig{UDPIdleTimeout: udpIdleTimeout},
 		logger:       logger,
 	}, nil
 }
 
 type Peer struct {
 	transport    *quic.Transport
-	client       *registar.RegisteredClient
 	control      *ControlListener
 	gameListener *udp.Listener
-
-	gameConn net.Conn
-	hostConn *quic.Conn
+	linkConfig   linkConfig
 
 	logger *slog.Logger
 }
@@ -123,35 +123,40 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error { // TODO: handle reconn
 
 	p.logger.Debug("accepted host connection", "remote_addr", hostConn.RemoteAddr().String())
 
-	gameConn, err := p.gameListener.Accept()
-	if err != nil {
-		return fmt.Errorf("accept incoming game connection: %w", err)
-	}
-	defer gameConn.Close()
-
-	p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
-
-	if err := link(ctx, gameConn, hostConn); err != nil {
-		// TODO: meaningful error codes
-		hostConn.CloseWithError(0, "link with game failed")
-
-		// Close() called
-		if errors.Is(err, quic.ErrTransportClosed) {
-			return nil
+	for {
+		gameConn, err := p.gameListener.Accept()
+		if err != nil {
+			return fmt.Errorf("accept incoming game connection: %w", err)
 		}
 
-		return fmt.Errorf("link with game: %w", err)
-	}
+		p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
 
-	return hostConn.CloseWithError(0, "peer exited")
+		if err := p.linkConfig.link(ctx, gameConn, hostConn); err != nil {
+			if errors.Is(err, errLinkIdleTimeout) {
+				p.logger.Debug("link idle timeout, closing game connection")
+				gameConn.Close()
+				continue
+			}
+
+			gameConn.Close()
+
+			// Close() called
+			if errors.Is(err, quic.ErrTransportClosed) {
+				hostConn.CloseWithError(0, "closing host connection")
+				return nil
+			}
+
+			// TODO: meaningful error codes
+			hostConn.CloseWithError(0, fmt.Sprintf("link with game failed: %s", err))
+			return fmt.Errorf("link with game: %w", err)
+		}
+	}
 }
 
 func (p *Peer) Close() error {
 	return errors.Join(
 		p.gameListener.Close(),
 		p.control.Close(),
-		// must close client, otherwise it holds connection to the server and sever cannot shut down
-		p.client.Close(),
 		// close transport last, otherwise it hangs waiting for client connection
 		p.transport.Close(),
 	)
