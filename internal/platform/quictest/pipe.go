@@ -47,7 +47,13 @@ func Pipe(t *testing.T) (client *quic.Conn, server *quic.Conn) {
 		NextProtos: []string{http3.NextProtoH3},
 	}
 
-	srv, err := quic.Listen(newLocalUDPConn(t), serverTLSConf, nil)
+	srv, err := quic.Listen(
+		newLocalUDPConn(t),
+		serverTLSConf,
+		&quic.Config{
+			EnableDatagrams: true,
+		},
+	)
 	if err != nil {
 		t.Fatal("listen quic:", err)
 	}
@@ -65,7 +71,15 @@ func Pipe(t *testing.T) (client *quic.Conn, server *quic.Conn) {
 		return err
 	})
 
-	clConn, err := quic.Dial(t.Context(), newLocalUDPConn(t), srv.Addr(), clientTLSConf, nil)
+	clConn, err := quic.Dial(
+		t.Context(),
+		newLocalUDPConn(t),
+		srv.Addr(),
+		clientTLSConf,
+		&quic.Config{
+			EnableDatagrams: true,
+		},
+	)
 	if err != nil {
 		t.Fatal("dial quic:", err)
 	}
