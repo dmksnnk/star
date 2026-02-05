@@ -10,9 +10,9 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dmksnnk/star/internal/forwarder"
-	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/integrationtest"
 	"golang.org/x/sync/errgroup"
@@ -26,10 +26,8 @@ var (
 
 // TODO: maybe move to integration tests
 func TestRunHost(t *testing.T) {
-	relay, relayAddr := integrationtest.ServeRelay(t)
-	reg := registar.NewRegistar2(relayAddr, relay)
-	srv := integrationtest.NewServer(t, secret, reg)
-	discoverySrvAddr := integrationtest.ServeDiscovery(t)
+	reg := integrationtest.NewRegistar(t)
+	srv := integrationtest.NewServer(t, reg, secret)
 
 	hostCfg := forwarder.HostConfig{
 		Logger:     logger,
@@ -56,7 +54,6 @@ func TestRunHost(t *testing.T) {
 
 		host, err := hostCfg.Register(
 			context.TODO(),
-			discoverySrvAddr,
 			srv.URL(),
 			token,
 		)
@@ -64,9 +61,8 @@ func TestRunHost(t *testing.T) {
 			t.Fatalf("host register: %v", err)
 		}
 
-		peer, err := peerCfg.Register(
+		peer, err := peerCfg.Join(
 			context.TODO(),
-			discoverySrvAddr,
 			srv.URL(),
 			token,
 		)
@@ -114,9 +110,7 @@ func TestRunHost(t *testing.T) {
 		}
 	})
 
-	t.Run("stops on context cancel", func(t *testing.T) {
-		t.Skip("this test fails because registar still thinks it has active host")
-
+	t.Run("peer reconnects game", func(t *testing.T) {
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
@@ -124,7 +118,6 @@ func TestRunHost(t *testing.T) {
 
 		host, err := hostCfg.Register(
 			context.TODO(),
-			discoverySrvAddr,
 			srv.URL(),
 			token,
 		)
@@ -132,9 +125,89 @@ func TestRunHost(t *testing.T) {
 			t.Fatalf("host register: %v", err)
 		}
 
-		peer, err := peerCfg.Register(
+		reconnectPeerCfg := forwarder.PeerConfig{
+			Logger:             logger,
+			TLSConfig:          srv.TLSConfig(),
+			RegistarListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+			UDPIdleTimeout:     300 * time.Millisecond,
+		}
+
+		peer, err := reconnectPeerCfg.Join(
 			context.TODO(),
-			discoverySrvAddr,
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("peer join: %v", err)
+		}
+
+		eg, ctx := errgroup.WithContext(context.Background())
+
+		eg.Go(func() error {
+			if err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
+				return fmt.Errorf("host run: %w", err)
+			}
+
+			return nil
+		})
+
+		eg.Go(func() error {
+			if err := peer.AcceptAndLink(ctx); err != nil {
+				return fmt.Errorf("peer run: %w", err)
+			}
+
+			return nil
+		})
+
+		// First game client connects and exchanges data.
+		client1, err := net.DialUDP("udp", nil, peer.UDPAddr())
+		if err != nil {
+			t.Fatalf("dial UDP: %v", err)
+		}
+		pingPong(t, serverConn, client1)
+		client1.Close()
+
+		// Second game client connects from a new port.
+		// The peer's link idle-timeouts on the old connection,
+		// and AcceptAndLink picks up the new one.
+		client2, err := net.DialUDP("udp", nil, peer.UDPAddr())
+		if err != nil {
+			t.Fatalf("dial UDP: %v", err)
+		}
+		pingPong(t, serverConn, client2)
+
+		serverConn.Close()
+		client2.Close()
+
+		if err := peer.Close(); err != nil {
+			t.Errorf("peer close: %v", err)
+		}
+		if err := host.Close(); err != nil {
+			t.Errorf("host close: %v", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			t.Errorf("%s", err)
+		}
+	})
+
+	t.Run("stops on context cancel", func(t *testing.T) {
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		if err != nil {
+			t.Fatalf("listen udp: %v", err)
+		}
+
+		host, err := hostCfg.Register(
+			context.TODO(),
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("host register: %v", err)
+		}
+
+		peer, err := peerCfg.Join(
+			context.TODO(),
 			srv.URL(),
 			token,
 		)

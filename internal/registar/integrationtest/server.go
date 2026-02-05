@@ -78,6 +78,18 @@ func (s *Server) URL() *url.URL {
 	}
 }
 
+func NewRegistar(t *testing.T) *registar.Registar2 {
+	relay, relayAddr := ServeRelay(t)
+
+	rootCA, err := registar.NewRootCA()
+	if err != nil {
+		t.Fatalf("NewRootCA: %s", err)
+	}
+	authority := registar.NewAuthority(rootCA)
+
+	return registar.NewRegistar2(authority, relayAddr, relay)
+}
+
 func ServeDiscovery(t *testing.T) netip.AddrPort {
 	conn := NewLocalUDPConn(t)
 
