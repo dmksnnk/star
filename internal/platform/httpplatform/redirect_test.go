@@ -10,47 +10,27 @@ import (
 
 func TestRedirectHTTPS(t *testing.T) {
 	tests := map[string]struct {
-		redirect string
+		redirect int
 		target   string
 		want     string
 	}{
-		"to host:port from host:port": {
-			redirect: "other-address:8083",
-			target:   "http://some-address:8000/path?key=value",
-			want:     "https://other-address:8083/path?key=value",
-		},
-		"to host:port from host": {
-			redirect: "other-address:8083",
-			target:   "http://some-address/path?key=value",
-			want:     "https://other-address:8083/path?key=value",
-		},
 		"to port from host:port": {
-			redirect: ":8083",
+			redirect: 8083,
 			target:   "http://some-address:8080/path?key=value",
 			want:     "https://some-address:8083/path?key=value",
 		},
 		"to port from host": {
-			redirect: ":8083",
+			redirect: 8083,
 			target:   "http://some-address/path?key=value",
 			want:     "https://some-address:8083/path?key=value",
 		},
 		"to tls port from host:port": {
-			redirect: ":443",
+			redirect: 443,
 			target:   "http://some-address:8080/path?key=value",
 			want:     "https://some-address/path?key=value",
 		},
 		"to tls port from host": {
-			redirect: ":443",
-			target:   "http://some-address/path?key=value",
-			want:     "https://some-address/path?key=value",
-		},
-		"to empty from host:port": {
-			redirect: "",
-			target:   "http://some-address:8080/path?key=value",
-			want:     "https://some-address/path?key=value",
-		},
-		"to empty from host": {
-			redirect: "",
+			redirect: 443,
 			target:   "http://some-address/path?key=value",
 			want:     "https://some-address/path?key=value",
 		},
