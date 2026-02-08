@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"sync"
-	"time"
 
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
@@ -60,9 +59,6 @@ func (h HostConfig) Register(
 	}
 
 	cc := registar.ClientConfig{
-		QUICConfig: &quic.Config{
-			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
-		},
 		TLSConfig: h.TLSConfig.Clone(),
 	}
 	ctrlConn, p2pTLSConf, err := cc.Host(ctx, tr, baseURL, token)

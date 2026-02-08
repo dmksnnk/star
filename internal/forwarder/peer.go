@@ -60,9 +60,6 @@ func (p PeerConfig) Join(
 	}
 
 	cc := registar.ClientConfig{
-		QUICConfig: &quic.Config{
-			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
-		},
 		TLSConfig: p.TLSConfig.Clone(),
 	}
 	ctrlConn, p2pTLSConf, err := cc.Join(ctx, tr, baseURL, token)

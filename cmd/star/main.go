@@ -116,7 +116,9 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 
 func loadTLSConfig(caCertPath string) (*tls.Config, error) {
 	if caCertPath == "" {
-		return &tls.Config{}, nil
+		return &tls.Config{
+			NextProtos: []string{http3.NextProtoH3},
+		}, nil
 	}
 
 	caCert, err := loadCACert(caCertPath)

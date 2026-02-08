@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
+	"time"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar/auth"
@@ -24,6 +26,8 @@ import (
 )
 
 type ClientConfig struct {
+	// QUICConfig is a config to dial registar with QUIC.
+	// If nil, a default config with 10s KeepAlivePeriod is used.
 	QUICConfig *quic.Config
 	// TLSConfig for calling registar API.
 	TLSConfig *tls.Config
@@ -65,19 +69,21 @@ func (cc ClientConfig) register(
 	}
 
 	addr := base.Host
+	if base.Port() == "" {
+		addr = net.JoinHostPort(base.Hostname(), "443")
+	}
+
 	updAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve UDP address: %w", err)
 	}
 
-	tlsConf := cc.TLSConfig
-	if tlsConf == nil {
-		tlsConf = &tls.Config{
-			NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
-		}
-	}
-
-	conn, err := quicTransport.Dial(ctx, updAddr, tlsConf, cc.QUICConfig)
+	conn, err := quicTransport.Dial(
+		ctx,
+		updAddr,
+		setupTLSConfig(cc.TLSConfig, base.Hostname()),
+		setupQUICConfig(cc.QUICConfig),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial QUIC: %w", err)
 	}
@@ -85,8 +91,16 @@ func (cc ClientConfig) register(
 	tr := &http3.Transport{}
 	clientConn := tr.NewClientConn(conn)
 
+	// get local IP for registar connection. quic.Conn.LocalAddr() returns unspecified address
+	// because quic.Transport listen on all interfaces.
+	localIP, err := getLocalAddr(updAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get local address: %w", err)
+	}
+	localPort := conn.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+
 	req := RegisterRequest{
-		PrivateAddr: conn.LocalAddr().(*net.UDPAddr).AddrPort(),
+		PrivateAddr: netip.AddrPortFrom(localIP, localPort),
 		CSR:         (*CSR)(csr),
 	}
 
@@ -119,12 +133,50 @@ func (cc ClientConfig) register(
 	return conn, tlsConfig((*x509.Certificate)(resp.CACert), (*x509.Certificate)(resp.Cert), privateKey), nil
 }
 
+func setupQUICConfig(quicConfig *quic.Config) *quic.Config {
+	if quicConfig == nil {
+		quicConfig = &quic.Config{
+			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
+		}
+	}
+
+	return quicConfig
+}
+
+func setupTLSConfig(conf *tls.Config, hostname string) *tls.Config {
+	if conf == nil {
+		return &tls.Config{
+			ServerName: hostname,
+			NextProtos: []string{http3.NextProtoH3}, // set the ALPN for HTTP/3
+		}
+	}
+
+	conf = conf.Clone() // avoid mutating caller's config
+
+	if conf.ServerName == "" { // if ServerName is not set, use the host part of the address we're connecting to.
+		conf.ServerName = hostname
+	}
+
+	return conf
+}
+
 func resolvePath(base *url.URL, sub string) string {
 	ref := &url.URL{
 		Path: path.Join(base.Path, sub),
 	}
 
 	return base.ResolveReference(ref).String()
+}
+
+// getLocalAddr returns the local IP address that the OS would use to reach dest.
+func getLocalAddr(dest *net.UDPAddr) (netip.Addr, error) {
+	c, err := net.DialUDP("udp", nil, dest)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("dial UDP: %w", err)
+	}
+	defer c.Close()
+
+	return c.LocalAddr().(*net.UDPAddr).AddrPort().Addr(), nil
 }
 
 func newCSR(privateKey *ecdsa.PrivateKey) (*x509.CertificateRequest, error) {
