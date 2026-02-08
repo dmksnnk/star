@@ -17,7 +17,8 @@ func LogRequests(logger *slog.Logger) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			handler.ServeHTTP(w, r)
+			rw := newResponseWriterWithStatus(w)
+			handler.ServeHTTP(rw, r)
 
 			var attrs []slog.Attr
 			key, ok := auth.KeyFromContext(r.Context())
@@ -25,20 +26,45 @@ func LogRequests(logger *slog.Logger) Middleware {
 				attrs = append(attrs, slog.String("game_key", key.String()))
 			}
 
-			attrs = append(attrs, slog.Group("request",
-				slog.String("method", r.Method),
-				slog.String("proto", r.Proto),
-				slog.String("host", r.Host),
-				slog.String("remote", r.RemoteAddr),
-				slog.String("path", r.URL.Path),
-				slog.String("query", r.URL.RawQuery),
-				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-				slog.Group("headers", headers(r.Header)...),
-			))
+			attrs = append(attrs,
+				slog.Group("request",
+					slog.String("method", r.Method),
+					slog.String("proto", r.Proto),
+					slog.String("host", r.Host),
+					slog.String("remote", r.RemoteAddr),
+					slog.String("path", r.URL.Path),
+					slog.String("query", r.URL.RawQuery),
+					slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+					slog.Group("headers", headers(r.Header)...),
+				),
+				slog.Group("response", slog.Int("status", rw.Status())),
+			)
 
 			logger.LogAttrs(r.Context(), slog.LevelDebug, "request", attrs...)
 		})
 	}
+}
+
+type responseWriterWithStatus struct {
+	http.ResponseWriter
+	status int
+}
+
+func newResponseWriterWithStatus(w http.ResponseWriter) *responseWriterWithStatus {
+	return &responseWriterWithStatus{ResponseWriter: w}
+}
+
+func (w *responseWriterWithStatus) WriteHeader(statusCode int) {
+	w.status = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *responseWriterWithStatus) Status() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+
+	return w.status
 }
 
 // AllowHosts allows requests only for the specified hosts.
