@@ -89,9 +89,18 @@ func (p PeerConfig) Join(
 		udpIdleTimeout = defaultUDPIdleTimeout
 	}
 
+	control := clc.ListenControl(ctrlConn, tr, p2pTLSConf)
+	hostConn, err := control.Accept(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("accept peer connection: %w", err)
+	}
+	defer control.Close()
+
+	logger.Debug("accepted host connection", "remote_addr", hostConn.RemoteAddr().String())
+
 	return &Peer{
 		transport:    tr,
-		control:      clc.ListenControl(ctrlConn, tr, p2pTLSConf),
+		hostConn:     hostConn,
 		gameListener: gameListener,
 		linkConfig:   linkConfig{UDPIdleTimeout: udpIdleTimeout},
 		logger:       logger,
@@ -100,7 +109,7 @@ func (p PeerConfig) Join(
 
 type Peer struct {
 	transport    *quic.Transport
-	control      *ControlListener
+	hostConn     *quic.Conn
 	gameListener *udp.Listener
 	linkConfig   linkConfig
 
@@ -112,23 +121,27 @@ func (p *Peer) UDPAddr() *net.UDPAddr {
 	return p.gameListener.UDPAddr()
 }
 
+// AcceptAndLink accepts incoming game connections and links them to the host peer connection.
+// It re-links game connection to the host connection if it is disconnected.
 func (p *Peer) AcceptAndLink(ctx context.Context) error {
-	hostConn, err := p.control.Accept(ctx)
-	if err != nil {
-		return fmt.Errorf("accept peer connection: %w", err)
-	}
-
-	p.logger.Debug("accepted host connection", "remote_addr", hostConn.RemoteAddr().String())
+	stop := context.AfterFunc(ctx, func() {
+		p.gameListener.Close()
+	})
+	defer stop()
 
 	for {
 		gameConn, err := p.gameListener.Accept()
 		if err != nil {
+			if errors.Is(err, udp.ErrClosedListener) && ctx.Err() != nil {
+				return context.Canceled // context canceled
+			}
+
 			return fmt.Errorf("accept incoming game connection: %w", err)
 		}
 
 		p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
 
-		if err := p.linkConfig.link(ctx, gameConn, hostConn); err != nil {
+		if err := p.linkConfig.link(ctx, gameConn, p.hostConn); err != nil {
 			if errors.Is(err, errLinkIdleTimeout) {
 				p.logger.Debug("link idle timeout, closing game connection")
 				gameConn.Close()
@@ -139,12 +152,11 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 
 			// Close() called
 			if errors.Is(err, quic.ErrTransportClosed) {
-				hostConn.CloseWithError(0, "closing host connection")
 				return nil
 			}
 
 			// TODO: meaningful error codes
-			hostConn.CloseWithError(0, fmt.Sprintf("link with game failed: %s", err))
+			p.hostConn.CloseWithError(0, fmt.Sprintf("link with game failed: %s", err))
 			return fmt.Errorf("link with game: %w", err)
 		}
 	}
@@ -153,7 +165,6 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 func (p *Peer) Close() error {
 	return errors.Join(
 		p.gameListener.Close(),
-		p.control.Close(),
 		// close transport last, otherwise it hangs waiting for client connection
 		p.transport.Close(),
 	)

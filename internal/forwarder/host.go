@@ -95,7 +95,8 @@ type Host struct {
 	errHandlers []func(error)
 }
 
-func (h *Host) Run(ctx context.Context, gameAddr *net.UDPAddr) error {
+// AcceptAndLink accepts incoming peer connections and links them to the local UDP game.
+func (h *Host) AcceptAndLink(ctx context.Context, gameAddr *net.UDPAddr) error {
 	for {
 		peerConn, err := h.control.Accept(ctx)
 		if err != nil {

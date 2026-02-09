@@ -73,7 +73,7 @@ func TestRunHost(t *testing.T) {
 		eg, ctx := errgroup.WithContext(context.Background())
 
 		eg.Go(func() error {
-			if err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
+			if err := host.AcceptAndLink(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
 				return fmt.Errorf("host run: %w", err)
 			}
 
@@ -144,7 +144,7 @@ func TestRunHost(t *testing.T) {
 		eg, ctx := errgroup.WithContext(context.Background())
 
 		eg.Go(func() error {
-			if err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
+			if err := host.AcceptAndLink(ctx, serverConn.LocalAddr().(*net.UDPAddr)); err != nil {
 				return fmt.Errorf("host run: %w", err)
 			}
 
@@ -191,7 +191,7 @@ func TestRunHost(t *testing.T) {
 		}
 	})
 
-	t.Run("stops on context cancel", func(t *testing.T) {
+	t.Run("stops on context cancel after game connected", func(t *testing.T) {
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
@@ -219,7 +219,7 @@ func TestRunHost(t *testing.T) {
 		eg, ctx := errgroup.WithContext(ctx)
 
 		eg.Go(func() error {
-			err := host.Run(ctx, serverConn.LocalAddr().(*net.UDPAddr))
+			err := host.AcceptAndLink(ctx, serverConn.LocalAddr().(*net.UDPAddr))
 			if !errors.Is(err, context.Canceled) {
 				return fmt.Errorf("host run: %w", err)
 			}
@@ -251,6 +251,60 @@ func TestRunHost(t *testing.T) {
 
 		serverConn.Close()
 		clientConn.Close()
+
+		if err := peer.Close(); err != nil {
+			t.Errorf("peer close: %v", err)
+		}
+		if err := host.Close(); err != nil {
+			t.Errorf("host close: %v", err)
+		}
+	})
+
+	t.Run("stops on context cancel before game connected", func(t *testing.T) {
+		host, err := hostCfg.Register(
+			context.TODO(),
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("host register: %v", err)
+		}
+
+		peer, err := peerCfg.Join(
+			context.TODO(),
+			srv.URL(),
+			token,
+		)
+		if err != nil {
+			t.Fatalf("peer register: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		eg, ctx := errgroup.WithContext(ctx)
+
+		eg.Go(func() error {
+			err := host.AcceptAndLink(ctx, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
+			if !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("host run: %w", err)
+			}
+
+			return nil
+		})
+
+		eg.Go(func() error {
+			err := peer.AcceptAndLink(ctx)
+			if !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("peer run: %w", err)
+			}
+
+			return nil
+		})
+
+		cancel()
+
+		if err := eg.Wait(); err != nil {
+			t.Fatalf("%s", err)
+		}
 
 		if err := peer.Close(); err != nil {
 			t.Errorf("peer close: %v", err)
