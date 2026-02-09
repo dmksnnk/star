@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/quic-go/quic-go"
@@ -50,6 +51,7 @@ func NewConnector(transport *quic.Transport, tlsConf *tls.Config, opts ...Option
 		transport: transport,
 		tlsConf:   tlsConf,
 		quicConf: &quic.Config{
+			KeepAlivePeriod: 10 * time.Second,
 			EnableDatagrams: true,
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -398,13 +400,6 @@ func connectedVia(conn *quic.Conn, public, private netip.AddrPort) string {
 
 // Option is a functional option for configuring a Connector.
 type Option func(*Connector)
-
-// WithQuicConfig sets the QUIC config for the Connector.
-func WithQuicConfig(quicConf *quic.Config) Option {
-	return func(c *Connector) {
-		c.quicConf = quicConf
-	}
-}
 
 // WithLogger sets the logger for the Connector.
 func WithLogger(logger *slog.Logger) Option {

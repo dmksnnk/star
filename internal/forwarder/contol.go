@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/p2p"
@@ -32,10 +31,6 @@ func (c ControlListenerConfig) ListenControl(controlConn *quic.Conn, tr *quic.Tr
 		tr,
 		tlsConf,
 		p2p.WithLogger(logger.With(slog.String("component", "p2p.Connector"))),
-		p2p.WithQuicConfig(&quic.Config{
-			EnableDatagrams: true,
-			KeepAlivePeriod: 10 * time.Second, // need to have keep-alive so link does not close
-		}),
 	)
 	agent := control.NewAgent()
 	conns := make(chan *quic.Conn, 1)

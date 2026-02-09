@@ -26,9 +26,6 @@ import (
 )
 
 type ClientConfig struct {
-	// QUICConfig is a config to dial registar with QUIC.
-	// If nil, a default config with 10s KeepAlivePeriod is used.
-	QUICConfig *quic.Config
 	// TLSConfig for calling registar API.
 	TLSConfig *tls.Config
 }
@@ -82,7 +79,9 @@ func (cc ClientConfig) register(
 		ctx,
 		updAddr,
 		setupTLSConfig(cc.TLSConfig, base.Hostname()),
-		setupQUICConfig(cc.QUICConfig),
+		&quic.Config{
+			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
+		},
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial QUIC: %w", err)
@@ -131,16 +130,6 @@ func (cc ClientConfig) register(
 	}
 
 	return conn, tlsConfig((*x509.Certificate)(resp.CACert), (*x509.Certificate)(resp.Cert), privateKey), nil
-}
-
-func setupQUICConfig(quicConfig *quic.Config) *quic.Config {
-	if quicConfig == nil {
-		quicConfig = &quic.Config{
-			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
-		}
-	}
-
-	return quicConfig
 }
 
 func setupTLSConfig(conf *tls.Config, hostname string) *tls.Config {

@@ -33,9 +33,6 @@ type PeerConfig struct {
 	// GameListenPort specifies the local UDP port to listen on for incoming game connections.
 	// If 0, a port number is automatically chosen.
 	GameListenPort int
-	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
-	// before it is used.
-	ConfigureTransport func(*quic.Transport)
 	// UDPIdleTimeout is the maximum duration without receiving UDP data
 	// from the game before the game connection is considered idle and terminated.
 	// If zero, defaults to 10s.
@@ -55,10 +52,6 @@ func (p PeerConfig) Join(
 	tr := &quic.Transport{
 		Conn: conn,
 	}
-	if p.ConfigureTransport != nil {
-		p.ConfigureTransport(tr)
-	}
-
 	cc := registar.ClientConfig{
 		TLSConfig: p.TLSConfig.Clone(),
 	}

@@ -34,9 +34,6 @@ type HostConfig struct {
 	// If the Port field is 0, a port number is automatically
 	// chosen.
 	ListenAddr *net.UDPAddr
-	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
-	// before it is used.
-	ConfigureTransport func(*quic.Transport)
 	// ErrHandlers are called when an error occurs when handling links.
 	ErrHandlers []func(error)
 }
@@ -54,10 +51,6 @@ func (h HostConfig) Register(
 	tr := &quic.Transport{
 		Conn: conn,
 	}
-	if h.ConfigureTransport != nil {
-		h.ConfigureTransport(tr)
-	}
-
 	cc := registar.ClientConfig{
 		TLSConfig: h.TLSConfig.Clone(),
 	}
