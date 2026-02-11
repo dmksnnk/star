@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -30,10 +31,16 @@ import (
 )
 
 type config struct {
-	Secret     string     `env:"SECRET,required"`
-	LogLevel   slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
-	Listen     listenConfig
-	CertConfig certConfig
+	SecretFromFile string     `env:"SECRET_FILE,file,required"`
+	LogLevel       slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
+	// AdvertiseHTTP3Port is the port to advertise for HTTP/3 support in Alt-Svc header.
+	// This can be different, especially when running in a container with port mapping.
+	AdvertiseHTTP3Port int `env:"ADVERTISE_HTTP3_PORT" envDefault:"443"`
+	// RedirectHTTPSPort is the port to redirect HTTP requests to HTTPS in the redirect server.
+	// This can be different, especially when running in a container with port mapping.
+	RedirectHTTPSPort int `env:"REDIRECT_HTTPS_PORT" envDefault:"443"`
+	Listen            listenConfig
+	CertConfig        certConfig
 }
 
 type listenConfig struct {
@@ -75,10 +82,10 @@ func main() {
 	caAuthority := registar.NewAuthority(rootCA)
 	registarSvc := registar.NewRegistar2(caAuthority, relayUDPAddr.AddrPort(), relaySrv)
 
-	tlsConf := newTLSConfig(cfg.CertConfig)
+	tlsConf, acmeMgr := newTLSConfig(cfg.CertConfig)
 
 	srvHTTP3 := registar.NewServer(registarSvc)
-	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
+	router := registar.NewRouter(srvHTTP3, []byte(cfg.SecretFromFile))
 	addHealthCheck(router)
 	handler := httpplatform.Wrap(
 		router,
@@ -88,6 +95,7 @@ func main() {
 	srvHTTP3.H3.Handler = handler
 	srvHTTP3.H3.Addr = cfg.Listen.TLS
 	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
+	srvHTTP3.H3.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	srvHTTP3.Logger = logger.With(slog.String("component", "registar"))
 
 	advertiseHTTP3Mux := http.NewServeMux()
@@ -96,20 +104,24 @@ func main() {
 		Addr: cfg.Listen.TLS,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
-			http3platform.AdvertiseHTTP3(srvHTTP3.H3),
-			httpplatform.LogRequests(slog.Default()),
+			http3platform.AdvertiseHTTP3(cfg.AdvertiseHTTP3Port),
+			httpplatform.LogRequests(logger.With(slog.String("component", "advertise_http3"))),
 			httpplatform.AllowHosts(cfg.CertConfig.Domains),
 		),
 		TLSConfig: tlsConf.Clone(),
 	}
 
+	redirectHandler := httpplatform.Wrap(
+		httpplatform.RedirectHTTPS(cfg.RedirectHTTPSPort),
+		httpplatform.LogRequests(logger.With(slog.String("component", "redirect_https"))),
+		httpplatform.AllowHosts(cfg.CertConfig.Domains),
+	)
+	if acmeMgr != nil {
+		redirectHandler = acmeMgr.HTTPHandler(redirectHandler)
+	}
 	redirectHTTPSSrv := http.Server{
-		Addr: cfg.Listen.HTTP,
-		Handler: httpplatform.Wrap(
-			httpplatform.RedirectHTTPS(cfg.Listen.TLS),
-			httpplatform.LogRequests(logger.With(slog.String("component", "redirect_https"))),
-			httpplatform.AllowHosts(cfg.CertConfig.Domains),
-		),
+		Addr:    cfg.Listen.HTTP,
+		Handler: redirectHandler,
 	}
 
 	eg.Go(func() error {
@@ -198,7 +210,7 @@ func parseConfig() config {
 		slog.Error("parse config", "error", err)
 		os.Exit(1)
 	}
-	cfg.Secret = strings.TrimSpace(cfg.Secret) // to remove trailing newlines
+	cfg.SecretFromFile = strings.TrimSpace(cfg.SecretFromFile) // to remove trailing newlines
 
 	return cfg
 }
@@ -212,14 +224,14 @@ func resolveUDPAddr(address string) *net.UDPAddr {
 	return udpAddr
 }
 
-func newTLSConfig(cfg certConfig) *tls.Config {
+func newTLSConfig(cfg certConfig) (*tls.Config, *autocert.Manager) {
 	if cfg.SelfSigned {
 		tlsConf, err := selfSigned(cfg)
 		if err != nil {
 			abort("create self signed cert", err)
 		}
 
-		return tlsConf
+		return tlsConf, nil
 	}
 
 	mgr := &autocert.Manager{
@@ -227,7 +239,7 @@ func newTLSConfig(cfg certConfig) *tls.Config {
 		Cache:      autocert.DirCache(cfg.Dir),
 		HostPolicy: autocert.HostWhitelist(cfg.Domains...),
 	}
-	return mgr.TLSConfig()
+	return mgr.TLSConfig(), mgr
 }
 
 func selfSigned(cfg certConfig) (*tls.Config, error) {
@@ -236,7 +248,7 @@ func selfSigned(cfg certConfig) (*tls.Config, error) {
 		return nil, fmt.Errorf("create CA: %w", err)
 	}
 
-	if err := writeCACert(ca); err != nil {
+	if err := writeCACert(cfg.Dir, ca); err != nil {
 		return nil, fmt.Errorf("write CA certificate: %w", err)
 	}
 
@@ -278,8 +290,8 @@ func selfSigned(cfg certConfig) (*tls.Config, error) {
 	}, nil
 }
 
-func writeCACert(cert *x509.Certificate) error {
-	f, err := os.Create("ca.crt")
+func writeCACert(dir string, cert *x509.Certificate) error {
+	f, err := os.Create(filepath.Join(dir, "ca.crt"))
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
