@@ -83,7 +83,7 @@ func runHost(ctx context.Context, cfg commandConfig, hostCfg hostConfig, logger 
 	logger.Info("game registered", "key", gameKey.String())
 
 	gameAddr := &net.UDPAddr{Port: hostCfg.GamePort}
-	if err := host.Run(ctx, gameAddr); err != nil {
+	if err := host.AcceptAndLink(ctx, gameAddr); err != nil {
 		logger.Error("run host", "error", err)
 		os.Exit(1)
 	}
@@ -116,7 +116,9 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 
 func loadTLSConfig(caCertPath string) (*tls.Config, error) {
 	if caCertPath == "" {
-		return &tls.Config{}, nil
+		return &tls.Config{
+			NextProtos: []string{http3.NextProtoH3},
+		}, nil
 	}
 
 	caCert, err := loadCACert(caCertPath)

@@ -19,7 +19,7 @@ RUN GOOS=linux GOARCH=amd64 go build -v -o $BUILD_DIR/registar ./cmd/registar/..
 # certs
 
 FROM golang:1.24.3-alpine3.22 AS certs
-RUN apk add --no-cache ca-certificates=20241121-r2
+RUN apk add --no-cache ca-certificates=20250911-r0
 
 # copy to scratch
 

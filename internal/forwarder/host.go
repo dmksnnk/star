@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"sync"
-	"time"
 
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
@@ -35,9 +34,6 @@ type HostConfig struct {
 	// If the Port field is 0, a port number is automatically
 	// chosen.
 	ListenAddr *net.UDPAddr
-	// ConfigureTransport is an optional callback that is called to configure the QUIC transport
-	// before it is used.
-	ConfigureTransport func(*quic.Transport)
 	// ErrHandlers are called when an error occurs when handling links.
 	ErrHandlers []func(error)
 }
@@ -55,14 +51,7 @@ func (h HostConfig) Register(
 	tr := &quic.Transport{
 		Conn: conn,
 	}
-	if h.ConfigureTransport != nil {
-		h.ConfigureTransport(tr)
-	}
-
 	cc := registar.ClientConfig{
-		QUICConfig: &quic.Config{
-			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
-		},
 		TLSConfig: h.TLSConfig.Clone(),
 	}
 	ctrlConn, p2pTLSConf, err := cc.Host(ctx, tr, baseURL, token)
@@ -99,7 +88,8 @@ type Host struct {
 	errHandlers []func(error)
 }
 
-func (h *Host) Run(ctx context.Context, gameAddr *net.UDPAddr) error {
+// AcceptAndLink accepts incoming peer connections and links them to the local UDP game.
+func (h *Host) AcceptAndLink(ctx context.Context, gameAddr *net.UDPAddr) error {
 	for {
 		peerConn, err := h.control.Accept(ctx)
 		if err != nil {

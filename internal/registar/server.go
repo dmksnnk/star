@@ -176,7 +176,7 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	}
 }
 
-func (s *Server) ServeQUICConn(conn *quic.Conn) error {
+func (s *Server) ServeQUICConn(conn *quic.Conn) error { // TODO: probably just use H3 server to server, no need for custom
 	s.init()
 
 	http3Conn, err := s.H3.NewRawServerConn(conn)

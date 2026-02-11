@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"time"
 )
@@ -33,7 +34,11 @@ func NewCA() (*x509.Certificate, crypto.PrivateKey, error) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber:          serialNumber,
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Star"},
+			CommonName:   "Star Root CA",
+		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(1, 0, 0), // 1 year
 		IsCA:                  true,                        // CA certificate

@@ -29,7 +29,7 @@ build-star-mac:
 
 .PHONY: build-docker
 build-docker:
-	@docker build --platform linux/amd64 -f registar.Dockerfile --tag=$(registar_image) .
+	@docker build --platform linux/amd64 -f Dockerfile --tag=$(registar_image) .
 
 .PHONY: clean
 clean:
