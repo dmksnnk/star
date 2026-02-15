@@ -13,6 +13,9 @@ import (
 const stardewPort = 24642
 
 const commandsUsage = `
+When run without arguments, starts a local web UI server and opens it in the browser.
+Set LISTEN_ADDR to override the default listen address (default: 127.0.0.1 with system assigned port).
+
 Commands:
   host - run the game host
   peer - run the game peer`
@@ -35,7 +38,7 @@ func (c *commandConfig) Parse(args []string) error {
 	c.FS.StringVar(&c.CaCert, "ca-cert", "", "path to CA certificate for registar")
 	c.FS.Usage = func() {
 		fmt.Fprintln(c.FS.Output()) // newline
-		fmt.Fprintln(c.FS.Output(), "Usage: star [OPTIONS] COMMAND")
+		fmt.Fprintln(c.FS.Output(), "Usage: star (starts web UI)\n       star [OPTIONS] COMMAND")
 		fmt.Fprintln(c.FS.Output(), commandsUsage)
 
 		fmt.Fprintln(c.FS.Output()) // newline
