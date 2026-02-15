@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strconv"
 	"sync"
 
@@ -430,7 +430,8 @@ func parseTemplates(fsys fs.FS) (map[string]*template.Template, error) {
 
 	templates := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
-		t, err := template.Must(base.Clone()).ParseFS(fsys, filepath.Join("templates", page))
+		// use path.Join because embed.FS always uses forward slashes and it breaks on Windows if we use filepath.Join.
+		t, err := template.Must(base.Clone()).ParseFS(fsys, path.Join("templates", page))
 		if err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", page, err)
 		}
