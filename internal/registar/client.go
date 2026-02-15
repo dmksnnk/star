@@ -70,14 +70,14 @@ func (cc ClientConfig) register(
 		addr = net.JoinHostPort(base.Hostname(), "443")
 	}
 
-	updAddr, err := net.ResolveUDPAddr("udp", addr)
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve UDP address: %w", err)
 	}
 
 	conn, err := quicTransport.Dial(
 		ctx,
-		updAddr,
+		udpAddr,
 		setupTLSConfig(cc.TLSConfig, base.Hostname()),
 		&quic.Config{
 			KeepAlivePeriod: 10 * time.Second, // need keep-alive so connection does not close
@@ -92,7 +92,7 @@ func (cc ClientConfig) register(
 
 	// get local IP for registar connection. quic.Conn.LocalAddr() returns unspecified address
 	// because quic.Transport listen on all interfaces.
-	localIP, err := getLocalAddr(updAddr)
+	localIP, err := getLocalAddr(udpAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get local address: %w", err)
 	}
