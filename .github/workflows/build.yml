@@ -1,87 +1,80 @@
-# Based on:
-# https://docs.github.com/en/actions/use-cases-and-examples/publishing-packages/publishing-docker-images#publishing-images-to-github-packages
 name: Build
 
 on:
+  workflow_dispatch:
   push:
     tags:
-      - "**"
-  workflow_dispatch: # manual trigger
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  registar:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+          - goos: windows
+            goarch: amd64
+            suffix: ".exe"
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Login to the Container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          context: .
-          file: registar.Dockerfile
-          tags: |
-            ghcr.io/dmksnnk/star/registar:${{ github.ref_name }}
-            ghcr.io/dmksnnk/star/registar:latest
-          labels: |
-            org.opencontainers.image.source=https://${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          # use GitHub Actions cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  star:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.24"
-      - name: Install deps
-        run: |
-          sudo apt update && \
-          DEBIAN_FRONTEND=noninteractive sudo apt install -y \
-            libgtk-3-0 \
-            libwebkit2gtk-4.1-0 \
-            g++-mingw-w64-x86-64 \
-            gcc-mingw-w64-x86-64 \
-            build-essential \
-            ca-certificates \
-            pkg-config
 
-      - name: Build windows
-      # symlink eventtoken.h to EventToken.h in the correct location for mingw-w64
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          sudo ln -s /usr/share/mingw-w64/include/eventtoken.h /usr/x86_64-w64-mingw32/include/EventToken.h
-          make build-star-win
-      - name: Upload artifacts
+          go build -v -trimpath \
+            -o star-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} \
+            ./cmd/star/...
+
+      - name: Upload artifact
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: star-binaries
-          path: |
-            bin/star-windows-amd64.exe
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        # if: github.ref_type == 'tag'
+          name: star-${{ matrix.goos }}-${{ matrix.goarch }}-${{ env.SHORT_SHA }}
+          path: star-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+
+      - name: Upload release binary
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            bin/star-windows-amd64.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: star-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: star-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
