@@ -8,25 +8,35 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/dmksnnk/star/internal/forwarder"
 	"github.com/dmksnnk/star/internal/registar/auth"
+	"github.com/dmksnnk/star/internal/webserver"
 	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
 	ctx, close := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer close()
 
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if len(os.Args) < 2 {
+		runWeb(ctx, logger)
+		return
+	}
+
 	var cfg commandConfig
 	if err := cfg.Parse(os.Args[1:]); err != nil {
 		abort(cfg.FS, err)
 	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	tlsConfig, err := loadTLSConfig(cfg.CaCert)
 	if err != nil {
@@ -152,4 +162,69 @@ func loadCACert(path string) (*x509.Certificate, error) {
 	}
 
 	return caCert, nil
+}
+
+func runWeb(ctx context.Context, logger *slog.Logger) {
+	addr := os.Getenv("LISTEN_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+
+	srv, err := webserver.New()
+	if err != nil {
+		logger.Error("create web server", "error", err)
+		os.Exit(1)
+	}
+
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		logger.Error("listen", "error", err)
+		os.Exit(1)
+	}
+
+	url := "http://" + l.Addr().String()
+	if err := openBrowser(url); err != nil {
+		logger.Warn("failed to open browser", "error", err)
+	}
+	fmt.Printf("Star is running at %s\nIf the browser didn't open automatically, copy and paste the link above into your browser.\n", url)
+
+	httpSrv := &http.Server{
+		Addr:    addr,
+		Handler: webserver.NewRouter(srv),
+	}
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		if err := httpSrv.Serve(l); err != http.ErrServerClosed {
+			return fmt.Errorf("listen and serve: %w", err)
+		}
+
+		return nil
+	})
+
+	<-ctx.Done()
+
+	logger.Debug("shutting down web server")
+
+	srv.Stop()
+	httpSrv.Close()
+
+	if err := eg.Wait(); err != nil {
+		logger.Error("web server error", "error", err)
+		os.Exit(1)
+	}
+}
+
+// openBrowser opens the specified URL in the default browser.
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "linux":
+		return exec.Command("xdg-open", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
 }

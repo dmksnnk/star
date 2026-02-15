@@ -1,118 +1,186 @@
-/* CSS structure for index page */
-.index-page {
-    position: relative;
+/* Page layout */
+body {
+    margin: 0;
+    background: #fff;
+}
+
+.container {
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 20px;
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
     align-items: center;
-    margin: 0 auto;
+}
+
+/* Header */
+.site-header {
     text-align: center;
-    /* grow with the container */
-    flex-grow: 1;
+    margin-bottom: 24px;
+    padding: 16px 0;
 }
 
-/* Override NES container styling */
+.site-header a {
+    text-decoration: none;
+    color: #212529;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.site-header span {
+    font-size: 1.5rem;
+}
+
+/* Content containers */
 .nes-container.with-title {
-    display: flex;
-    flex-direction: column;
-    flex-grow: 1;
-    min-height: calc(100vh - 20px);
-    width: calc(100% - 20px);
-}
-
-.main-container {
-    flex: 1;
-    display: block;
-}
-
-/* Position close button at the bottom */
-.bottom-button-container {
-    position: relative;
-    margin-left: auto;
-    margin-right: auto;
-    width: fit-content;
-}
-
-/* Removed mouse style override from NES.css: */
-* {
-    cursor: auto !important;
-}
-
-/* Form element spacing */
-.nes-field {
-    margin-bottom: 20px;
-}
-
-/* Ensure nes-select is-inline mimics nes-field */
-.nes-select.is-inline {
-    display: flex;
+    width: 100%;
     text-align: left;
 }
 
-.nes-select.is-inline label {
-    flex-basis: 0;
-    flex-grow: 1;
-    margin: 0;
-    margin-right: 1.5rem;
-    text-align: right;
+/* Form fields */
+.nes-field {
+    margin-bottom: 24px;
 }
 
-.nes-select.is-inline select {
-    flex-basis: 0;
-    flex-grow: 5;
-}
-
-@media screen and (max-width: 768px) {
-    .nes-select.is-inline {
-        display: block;
-    }
-
-    .nes-select.is-inline label {
-        margin-bottom: 0.5rem;
-        text-align: left;
-    }
-
-    .nes-select.is-inline select {
-        max-width: 100%;
-    }
-}
-
-/* Button spacing */
-.nes-btn {
-    margin: 10px 10px;
+.nes-field label {
     display: block;
-    width: 100%;
-    /* Limit width for better appearance */
-    max-width: 300px;
-    margin-left: auto;
-    margin-right: auto;
+    margin-bottom: 8px;
 }
 
-.error-message {
-    /* This is the NES.css error text color */
-    color: #e76e55;
-    /* Add compact margins between messages */
-    margin: 2px 0;
+/* Buttons */
+.nes-btn {
+    display: block;
+    text-align: center;
 }
 
-.message-container {
-    /* Smaller font size than before */
-    font-size: 0.8em;
-    min-height: 30px;
-    margin-bottom: 10px;
+.actions {
     display: flex;
-    flex-direction: column;
+    gap: 12px;
+    margin-top: 32px;
 }
 
-.logs-container {
-    font-size: 0.5em;
+.actions .nes-btn {
+    flex: 1;
+}
+
+/* Copy row (input + copy button) */
+.copy-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.copy-row .nes-input {
+    flex: 1;
+}
+
+.copy-row .nes-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+    min-width: 140px;
+}
+
+/* Terminal-style log area */
+.logs-terminal {
+    background: #212529;
+    color: #4af626;
+    font-family: monospace;
+    font-size: 0.65rem;
+    line-height: 1.6;
+    padding: 12px;
+    height: 240px;
+    overflow-y: scroll;
+    image-rendering: pixelated;
+}
+
+.logs-terminal div {
+    word-break: break-all;
+}
+
+/* Error messages */
+.errors {
+    margin-bottom: 16px;
+    padding: 8px 12px;
+    border: 2px solid #e76e55;
+    background: #fff0f0;
+}
+
+.errors .nes-text.is-error {
+    font-size: 0.7rem;
+    margin: 4px 0;
+}
+
+/* Error page */
+.error-display {
+    text-align: center;
+    margin: 20px 0;
+}
+
+.error-display .nes-text {
+    margin: 16px 0;
+}
+
+.error-display .nes-balloon {
+    margin-top: 16px;
+    text-align: left;
+}
+
+/* Collapsible advanced options */
+.advanced-options {
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
+.advanced-options summary {
+    font-size: 0.75rem;
+    padding: 6px 16px;
+    display: inline-block;
+}
+
+.advanced-options .advanced-fields {
+    margin-top: 16px;
+}
+
+.advanced-options .nes-field:last-child {
+    margin-bottom: 0;
+}
+
+/* File picker (styled replacement for input[type=file]) */
+.file-picker {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.file-picker .nes-btn {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    padding: 6px 16px;
+}
+
+.file-picker-name {
+    font-size: 0.75rem;
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Responsive */
+@media screen and (max-width: 600px) {
+    .actions {
+        flex-direction: column;
+    }
+
+    .site-header span {
+        font-size: 1.2rem;
+    }
 }
 
 @media screen and (max-width: 400px) {
-    .nes-btn {
-        width: fit-content;
-    }
-
-    .nes-container.with-title {
-        width: calc(100% - 10px);
+    .container {
+        padding: 10px;
     }
 }

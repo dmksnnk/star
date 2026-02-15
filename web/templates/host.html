@@ -1,0 +1,46 @@
+{{define "content"}}
+<div class="nes-container with-title">
+    <p class="title">Host a Game</p>
+
+    {{if .Errors}}
+    <div class="errors">
+        {{range .Errors}}
+        <p class="nes-text is-error">{{.}}</p>
+        {{end}}
+    </div>
+    {{end}}
+
+    <form method="POST" action="/host">
+        <div class="nes-field">
+            <label for="game-port">Game</label>
+            <div class="nes-select">
+                <select name="game-port" id="game-port" required>
+                    <option value="" disabled {{if not (.Values.Get "game-port" )}}selected{{end}} hidden>Select a game...</option>
+                    {{range .Games}}
+                    <option value="{{.Port}}">{{.Name}} (port {{.Port}})</option>
+                    {{end}}
+                </select>
+            </div>
+        </div>
+
+        <details class="advanced-options">
+            <summary class="nes-btn is-normal">Advanced</summary>
+            <div class="advanced-fields">
+                <div class="nes-field">
+                    <label for="game-key">Game Key</label>
+                    <input type="text" name="game-key" id="game-key" class="nes-input"
+                           placeholder="XXXX-XXXX (auto-generated if empty)"
+                           pattern="[A-Za-z0-9]{4}-[A-Za-z0-9]{4}"
+                           title="Format: XXXX-XXXX"
+                           value='{{.Values.Get "game-key"}}'>
+                </div>
+            </div>
+        </details>
+
+        <div class="actions">
+            <button type="submit" class="nes-btn is-primary">Start Hosting</button>
+            <a href="/" class="nes-btn">Back</a>
+        </div>
+    </form>
+</div>
+{{end}}

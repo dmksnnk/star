@@ -1,20 +1,32 @@
+{{define "base"}}
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
-    <link rel="stylesheet" href="/static/nes.css">
-    <link rel="stylesheet" href="/static/style.css">
-    <!-- font -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}Star{{end}}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23f7d51d' d='M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.27 5.82 22 7 14.14 2 9.27l6.91-1.01z'/></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/nes.css">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 
 <body>
-
-    {{ block "body" . }}{{ end }}
-
+    <div class="container">
+        <header class="site-header">
+            <a href="/">
+                <i class="nes-icon is-medium star"></i>
+                <span>Star</span>
+            </a>
+        </header>
+        <main>
+            {{block "content" .}}{{end}}
+        </main>
+    </div>
 </body>
 
 </html>
+{{end}}
