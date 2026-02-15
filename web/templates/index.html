@@ -1,13 +1,58 @@
-{{template "header.html" .}}
-<p class="title">Choose an option:</p>
+{{define "content"}}
+<div class="nes-container with-title">
+    <p class="title">Star</p>
 
-<div class="main-container">
-    <i class="nes-icon is-large star"></i>
-    <a href="/start-host" class="nes-btn">Start a server</a>
-    <a href="/connect" class="nes-btn">Connect</a>
-</div>
+    {{if .Errors}}
+    <div class="errors">
+        {{range .Errors}}
+        <p class="nes-text is-error">{{.}}</p>
+        {{end}}
+    </div>
+    {{end}}
 
-<div class="bottom-button-container">
-    <a href="/close" class="nes-btn is-error">Close</a>
+    <form method="POST" action="/setup" enctype="multipart/form-data">
+        <div class="nes-field">
+            <label for="registar-url">Registar URL</label>
+            <input type="url" name="registar-url" id="registar-url" class="nes-input" required
+                   placeholder="https://registar.example.com"
+                   value='{{.Values.Get "registar-url"}}'>
+        </div>
+
+        <div class="nes-field">
+            <label for="secret">Secret</label>
+            <input type="password" name="secret" id="secret" class="nes-input" required
+                   placeholder="Shared secret with the server"
+                   value='{{.Values.Get "secret"}}'>
+        </div>
+
+        <details class="advanced-options">
+            <summary class="nes-btn is-normal">Advanced</summary>
+            <div class="advanced-fields">
+                <div class="nes-field">
+                    <label>CA Certificate</label>
+                    <div class="file-picker">
+                        <label for="ca-cert" class="nes-btn">Choose File</label>
+                        <span class="file-picker-name">{{if .Values.Get "ca-cert"}}{{.Values.Get "ca-cert"}}{{else}}No file selected{{end}}</span>
+                        <input type="file" name="ca-cert" id="ca-cert"
+                               accept=".pem,.crt,.cer" hidden
+                               onchange="this.parentElement.querySelector('.file-picker-name').textContent = this.files[0]?.name || 'No file selected'">
+                    </div>
+                </div>
+
+                <div class="nes-field">
+                    <label for="port">Listen Port</label>
+                    <input type="number" name="port" id="port" class="nes-input"
+                           placeholder="0 (random)"
+                           min="0" max="65535"
+                           value='{{.Values.Get "port"}}'>
+                </div>
+            </div>
+        </details>
+
+        <div class="actions">
+            <button type="submit" name="mode" value="host" class="nes-btn is-primary">Host a Game</button>
+            <button type="submit" name="mode" value="peer" class="nes-btn is-success">Join a Game</button>
+        </div>
+    </form>
 </div>
-{{template "footer.html" .}}
+{{end}}

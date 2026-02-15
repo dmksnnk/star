@@ -1,0 +1,48 @@
+{{define "content"}}
+<div class="nes-container with-title">
+    <p class="title">Connected</p>
+
+    <div class="nes-field">
+        <label for="listen-address">Connect your game to</label>
+        <div class="copy-row">
+            <input id="listen-address" class="nes-input" readonly value="{{.ListenAddress}}">
+            <button type="button" class="nes-btn is-primary" onclick="copyToClipboard('listen-address', this)">Copy</button>
+        </div>
+    </div>
+
+    <div class="nes-field">
+        <label>Logs</label>
+        <div class="logs-terminal" id="logs"></div>
+    </div>
+
+    <form method="POST" action="/peer/stop">
+        <button type="submit" class="nes-btn is-error">Disconnect</button>
+    </form>
+</div>
+
+<script>
+    function copyToClipboard(inputId, btn) {
+        const input = document.getElementById(inputId);
+        navigator.clipboard.writeText(input.value).then(() => {
+            clearTimeout(btn._copyTimeout);
+            btn.textContent = 'Copied!';
+            btn.classList.remove('is-primary');
+            btn.classList.add('is-success');
+            btn._copyTimeout = setTimeout(() => {
+                btn.textContent = 'Copy';
+                btn.classList.remove('is-success');
+                btn.classList.add('is-primary');
+            }, 1500);
+        });
+    }
+
+    const logs = document.getElementById('logs');
+    const eventSource = new EventSource('/logs');
+    eventSource.onmessage = function(event) {
+        const line = document.createElement('div');
+        line.textContent = event.data;
+        logs.appendChild(line);
+        logs.scrollTop = logs.scrollHeight;
+    };
+</script>
+{{end}}

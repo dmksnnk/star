@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="nes-container with-title">
+    <p class="title">Join a Game</p>
+
+    {{if .Errors}}
+    <div class="errors">
+        {{range .Errors}}
+        <p class="nes-text is-error">{{.}}</p>
+        {{end}}
+    </div>
+    {{end}}
+
+    <form method="POST" action="/peer">
+        <div class="nes-field">
+            <label for="invite-code">Invite Code</label>
+            <input name="invite-code" id="invite-code" class="nes-input" required
+                   placeholder="XXXX-XXXX"
+                   pattern="[A-Za-z0-9]{4}-[A-Za-z0-9]{4}"
+                   title="Format: XXXX-XXXX"
+                   value='{{if .Values}}{{.Values.Get "invite-code"}}{{end}}'>
+        </div>
+
+        <details class="advanced-options">
+            <summary class="nes-btn is-normal">Advanced</summary>
+            <div class="advanced-fields">
+                <div class="nes-field">
+                    <label for="game-listen-port">Game Listen Port</label>
+                    <input type="number" name="game-listen-port" id="game-listen-port" class="nes-input"
+                           placeholder="0 (random)"
+                           min="0" max="65535"
+                           value='{{if .Values}}{{.Values.Get "game-listen-port"}}{{end}}'>
+                </div>
+            </div>
+        </details>
+
+        <div class="actions">
+            <button type="submit" class="nes-btn is-primary">Connect</button>
+            <a href="/" class="nes-btn">Back</a>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.querySelectorAll('.nes-input[pattern]').forEach(input => {
+        input.addEventListener('input', () => {
+            if (input.value === '') {
+                input.classList.remove('is-success', 'is-error');
+            } else if (input.checkValidity()) {
+                input.classList.remove('is-error');
+                input.classList.add('is-success');
+            } else {
+                input.classList.remove('is-success');
+                input.classList.add('is-error');
+            }
+        });
+    });
+</script>
+{{end}}
