@@ -49,6 +49,10 @@ body {
     margin-bottom: 8px;
 }
 
+#registar-url {
+    font-size: 0.75rem;
+}
+
 /* Buttons */
 .nes-btn {
     display: block;
