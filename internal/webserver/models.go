@@ -147,8 +147,11 @@ func (cfg *hostConfig) UnmarshalHTTP(r *http.Request) []error {
 
 	var errs []error
 
-	// Game port (required).
+	// Game port (required). If "custom", read from custom-game-port.
 	portStr := r.FormValue("game-port")
+	if portStr == "custom" {
+		portStr = r.FormValue("custom-game-port")
+	}
 	if portStr == "" {
 		errs = append(errs, errors.New("port is required"))
 	} else {
