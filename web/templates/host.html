@@ -12,16 +12,34 @@
 
     <form method="POST" action="/host">
         <div class="nes-field">
-            <label for="game-port">Game</label>
+            <label for="game-select">Game</label>
             <div class="nes-select">
-                <select name="game-port" id="game-port" required>
+                <select name="game-port" id="game-select" required>
                     <option value="" disabled {{if not (.Values.Get "game-port" )}}selected{{end}} hidden>Select a game...</option>
                     {{range .Games}}
-                    <option value="{{.Port}}">{{.Name}} (port {{.Port}})</option>
+                    <option value="{{.Port}}" {{if eq (printf "%d" .Port) ($.Values.Get "game-port" )}}selected{{end}}>{{.Name}} (port {{.Port}})</option>
                     {{end}}
+                    <option value="custom" {{if eq ($.Values.Get "game-port" ) "custom" }}selected{{end}}>Custom port...</option>
                 </select>
             </div>
+            <input type="number" name="custom-game-port" id="custom-port" class="nes-input"
+                   min="1" max="65535" placeholder="Enter port number..."
+                   value='{{.Values.Get "custom-game-port"}}'
+                   style="display:none; margin-top:8px;">
         </div>
+        <script>
+            (function () {
+                var sel = document.getElementById('game-select');
+                var inp = document.getElementById('custom-port');
+                function toggle() {
+                    var custom = sel.value === 'custom';
+                    inp.style.display = custom ? '' : 'none';
+                    inp.required = custom;
+                }
+                sel.addEventListener('change', toggle);
+                toggle();
+            })();
+        </script>
 
         <details class="advanced-options">
             <summary class="nes-btn is-normal">Advanced</summary>
