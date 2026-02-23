@@ -33,23 +33,33 @@ import (
 type config struct {
 	SecretFromFile string     `env:"SECRET_FILE,file,required"`
 	LogLevel       slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
-	// AdvertiseHTTP3Port is the port to advertise for HTTP/3 support in Alt-Svc header.
-	// This can be different, especially when running in a container with port mapping.
-	AdvertiseHTTP3Port int `env:"ADVERTISE_HTTP3_PORT" envDefault:"443"`
-	// RedirectHTTPSPort is the port to redirect HTTP requests to HTTPS in the redirect server.
-	// This can be different, especially when running in a container with port mapping.
-	RedirectHTTPSPort int `env:"REDIRECT_HTTPS_PORT" envDefault:"443"`
-	Listen            listenConfig
-	CertConfig        certConfig
+	HTTP           httpConfig
+	HTTPS          httpsConfig
+	Relay          relayConfig
+	Cert           certConfig
 }
 
-type listenConfig struct {
-	// HTTP is the listen address on for HTTP connections to redirect to HTTPS.
-	HTTP string `env:"LISTEN_HTTP" envDefault:":80"`
-	// TLS is the listen address for HTTPS and HTTP/3 connections.
-	TLS string `env:"LISTEN_TLS" envDefault:":443"`
-	// Relay is the listen address for the UDP relay service.
-	Relay string `env:"LISTEN_RELAY" envDefault:":8001"`
+type httpConfig struct {
+	// Listen is the listen address for HTTP connections to redirect to HTTPS.
+	Listen string `env:"HTTP_LISTEN" envDefault:":80"`
+}
+
+type httpsConfig struct {
+	// Listen is the listen address for HTTPS and HTTP/3 connections.
+	Listen string `env:"HTTPS_LISTEN" envDefault:":443"`
+	// HTTP3Port is the port to advertise for HTTP/3 support in Alt-Svc header.
+	// This can be different, especially when running in a container with port mapping.
+	HTTP3Port int `env:"HTTPS_HTTP3_PORT" envDefault:"443"`
+	// RedirectPort is the port to redirect HTTP requests to HTTPS in the redirect server.
+	// This can be different, especially when running in a container with port mapping.
+	RedirectPort int `env:"HTTPS_REDIRECT_PORT" envDefault:"443"`
+}
+
+type relayConfig struct {
+	// Listen is the listen address for the UDP relay service.
+	Listen string `env:"RELAY_LISTEN" envDefault:":8001"`
+	// AdvertiseAddr is the address to advertise for the relay server in the registrar response.
+	AdvertiseAddr string `env:"RELAY_ADVERTISE_ADDR" required:"true"`
 }
 
 type certConfig struct {
@@ -71,7 +81,6 @@ func main() {
 
 	eg, ctx := errgroup.WithContext(ctx)
 
-	relayUDPAddr := resolveUDPAddr(cfg.Listen.Relay)
 	relaySrv := relay.NewUDPRelay(relay.WithLogger(logger.With("component", "relay")))
 
 	rootCA, err := registar.NewRootCA()
@@ -80,9 +89,10 @@ func main() {
 	}
 
 	caAuthority := registar.NewAuthority(rootCA)
-	registarSvc := registar.NewRegistar2(caAuthority, relayUDPAddr.AddrPort(), relaySrv)
+	advertiseRelayAddr := resolveUDPAddr(cfg.Relay.AdvertiseAddr)
+	registarSvc := registar.NewRegistar2(caAuthority, advertiseRelayAddr.AddrPort(), relaySrv)
 
-	tlsConf, acmeMgr := newTLSConfig(cfg.CertConfig)
+	tlsConf, acmeMgr := newTLSConfig(cfg.Cert)
 
 	srvHTTP3 := registar.NewServer(registarSvc)
 	router := registar.NewRouter(srvHTTP3, []byte(cfg.SecretFromFile))
@@ -90,10 +100,10 @@ func main() {
 	handler := httpplatform.Wrap(
 		router,
 		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
-		httpplatform.AllowHosts(cfg.CertConfig.Domains),
+		httpplatform.AllowHosts(cfg.Cert.Domains),
 	)
 	srvHTTP3.H3.Handler = handler
-	srvHTTP3.H3.Addr = cfg.Listen.TLS
+	srvHTTP3.H3.Addr = cfg.HTTPS.Listen
 	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
 	srvHTTP3.H3.TLSConfig.NextProtos = []string{http3.NextProtoH3}
 	srvHTTP3.Logger = logger.With(slog.String("component", "registar"))
@@ -101,29 +111,30 @@ func main() {
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
 	advertiseHTTP3Srv := http.Server{
-		Addr: cfg.Listen.TLS,
+		Addr: cfg.HTTPS.Listen,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
-			http3platform.AdvertiseHTTP3(cfg.AdvertiseHTTP3Port),
+			http3platform.AdvertiseHTTP3(cfg.HTTPS.HTTP3Port),
 			httpplatform.LogRequests(logger.With(slog.String("component", "advertise_http3"))),
-			httpplatform.AllowHosts(cfg.CertConfig.Domains),
+			httpplatform.AllowHosts(cfg.Cert.Domains),
 		),
 		TLSConfig: tlsConf.Clone(),
 	}
 
 	redirectHandler := httpplatform.Wrap(
-		httpplatform.RedirectHTTPS(cfg.RedirectHTTPSPort),
+		httpplatform.RedirectHTTPS(cfg.HTTPS.RedirectPort),
 		httpplatform.LogRequests(logger.With(slog.String("component", "redirect_https"))),
-		httpplatform.AllowHosts(cfg.CertConfig.Domains),
+		httpplatform.AllowHosts(cfg.Cert.Domains),
 	)
 	if acmeMgr != nil {
 		redirectHandler = acmeMgr.HTTPHandler(redirectHandler)
 	}
 	redirectHTTPSSrv := http.Server{
-		Addr:    cfg.Listen.HTTP,
+		Addr:    cfg.HTTP.Listen,
 		Handler: redirectHandler,
 	}
 
+	relayUDPAddr := resolveUDPAddr(cfg.Relay.Listen)
 	eg.Go(func() error {
 		if err := relaySrv.ListenUDP(relayUDPAddr); err != nil {
 			return fmt.Errorf("listen relay: %w", err)
@@ -170,9 +181,9 @@ func main() {
 
 	logger.Info("listening",
 		slog.Group("address",
-			slog.String("http", cfg.Listen.HTTP),
-			slog.String("relay", cfg.Listen.Relay),
-			slog.String("tls", cfg.Listen.TLS),
+			slog.String("http", cfg.HTTP.Listen),
+			slog.String("https", cfg.HTTPS.Listen),
+			slog.String("relay", cfg.Relay.Listen),
 		),
 	)
 
