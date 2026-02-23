@@ -407,3 +407,13 @@ func WithLogger(logger *slog.Logger) Option {
 		c.logger = logger
 	}
 }
+
+// WithHandshakeIdleTimeout sets the idle timeout before completion of the handshake.
+// If we don't receive any packet from the peer within this time, the connection attempt is aborted.
+// Additionally, if the handshake doesn't complete in twice this time, the connection attempt is also aborted.
+// If this value is zero, the timeout is set to 5 seconds.
+func WithHandshakeIdleTimeout(d time.Duration) Option {
+	return func(c *Connector) {
+		c.quicConf.HandshakeIdleTimeout = d
+	}
+}
