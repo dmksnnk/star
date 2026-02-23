@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/dmksnnk/star/internal/registar/control"
 	"github.com/dmksnnk/star/internal/registar/p2p"
@@ -19,6 +20,10 @@ var errControlListenerClosed = errors.New("control listener closed")
 
 type ControlListenerConfig struct {
 	Logger *slog.Logger
+	// P2PDialTimeout sets the maximum idle timeout for P2P connection attempts.
+	// A shorter value makes hole-punching fail faster when the remote is unreachable.
+	// If zero, the quic-go default applies (~5s for the handshake phase).
+	P2PDialTimeout time.Duration
 }
 
 func (c ControlListenerConfig) ListenControl(controlConn *quic.Conn, tr *quic.Transport, tlsConf *tls.Config) *ControlListener {
@@ -27,19 +32,26 @@ func (c ControlListenerConfig) ListenControl(controlConn *quic.Conn, tr *quic.Tr
 		logger = slog.Default()
 	}
 
-	connector := p2p.NewConnector(
-		tr,
-		tlsConf,
+	connectorOpts := []p2p.Option{
 		p2p.WithLogger(logger.With(slog.String("component", "p2p.Connector"))),
-	)
+	}
+	if c.P2PDialTimeout > 0 {
+		connectorOpts = append(connectorOpts, p2p.WithHandshakeIdleTimeout(c.P2PDialTimeout))
+	}
+	connector := p2p.NewConnector(tr, tlsConf, connectorOpts...)
 	agent := control.NewAgent()
 	conns := make(chan *quic.Conn, 1)
 
 	agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
 		p2pConn, err := connector.Connect(ctx, cmd.PublicAddress, cmd.PrivateAddress)
 		if err != nil {
+			var idleErr *quic.IdleTimeoutError
+			if errors.As(err, &idleErr) {
+				logger.DebugContext(ctx, "peer connection timed out", "public_addr", cmd.PublicAddress, "private_addr", cmd.PrivateAddress)
+				return false, nil
+			}
+
 			logger.ErrorContext(ctx, "p2p connection failed", "error", err)
-			// TODO: figure out on which error return just false without error
 			return false, fmt.Errorf("connect to peer: %w", err)
 		}
 
@@ -81,6 +93,8 @@ func (l *ControlListener) Accept(ctx context.Context) (*quic.Conn, error) {
 	case conn := <-l.conns:
 		return conn, nil
 	case <-l.done:
+		return nil, errControlListenerClosed
+	case <-l.ctrlConn.Context().Done():
 		return nil, errControlListenerClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
