@@ -2,6 +2,7 @@ package controltest
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/dmksnnk/star/internal/registar/control"
@@ -16,7 +17,17 @@ func ServeAgent(t *testing.T, agent *control.Agent, conn *quic.Conn) {
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		return agent.Serve(conn)
+		ctx := conn.Context()
+		for {
+			str, err := conn.AcceptStream(ctx)
+			if err != nil {
+				return fmt.Errorf("accept stream: %w", err)
+			}
+
+			eg.Go(func() error {
+				return agent.Serve(str)
+			})
+		}
 	})
 
 	t.Cleanup(func() {
