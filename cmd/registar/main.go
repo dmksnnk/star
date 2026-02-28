@@ -24,18 +24,17 @@ import (
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
-	"github.com/dmksnnk/star/internal/relay"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
 )
 
 type config struct {
-	SecretFromFile string     `env:"SECRET_FILE,file,required"`
+	SecretFromFile string     `env:"SECRET_FILE,file"` // if set, takes precedence over Secret
+	Secret         string     `env:"SECRET"`
 	LogLevel       slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
 	HTTP           httpConfig
 	HTTPS          httpsConfig
-	Relay          relayConfig
 	Cert           certConfig
 }
 
@@ -47,19 +46,12 @@ type httpConfig struct {
 type httpsConfig struct {
 	// Listen is the listen address for HTTPS and HTTP/3 connections.
 	Listen string `env:"HTTPS_LISTEN" envDefault:":443"`
-	// HTTP3Port is the port to advertise for HTTP/3 support in Alt-Svc header.
+	// AdvertiseHTTP3Port is the port to advertise for HTTP/3 support in Alt-Svc header.
 	// This can be different, especially when running in a container with port mapping.
-	HTTP3Port int `env:"HTTPS_HTTP3_PORT" envDefault:"443"`
+	AdvertiseHTTP3Port int `env:"HTTPS_ADVERTISE_HTTP3_PORT" envDefault:"443"`
 	// RedirectPort is the port to redirect HTTP requests to HTTPS in the redirect server.
 	// This can be different, especially when running in a container with port mapping.
 	RedirectPort int `env:"HTTPS_REDIRECT_PORT" envDefault:"443"`
-}
-
-type relayConfig struct {
-	// Listen is the listen address for the UDP relay service.
-	Listen string `env:"RELAY_LISTEN" envDefault:":8001"`
-	// AdvertiseAddr is the address to advertise for the relay server in the registrar response.
-	AdvertiseAddr string `env:"RELAY_ADVERTISE_ADDR" required:"true"`
 }
 
 type certConfig struct {
@@ -81,21 +73,17 @@ func main() {
 
 	eg, ctx := errgroup.WithContext(ctx)
 
-	relaySrv := relay.NewUDPRelay(relay.WithLogger(logger.With("component", "relay")))
-
 	rootCA, err := registar.NewRootCA()
 	if err != nil {
 		abort("create root CA", err)
 	}
 
 	caAuthority := registar.NewAuthority(rootCA)
-	advertiseRelayAddr := resolveUDPAddr(cfg.Relay.AdvertiseAddr)
-	registarSvc := registar.NewRegistar2(caAuthority, advertiseRelayAddr.AddrPort(), relaySrv)
 
 	tlsConf, acmeMgr := newTLSConfig(cfg.Cert)
 
-	srvHTTP3 := registar.NewServer(registarSvc)
-	router := registar.NewRouter(srvHTTP3, []byte(cfg.SecretFromFile))
+	srvHTTP3 := registar.NewServer(caAuthority)
+	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
 	addHealthCheck(router)
 	handler := httpplatform.Wrap(
 		router,
@@ -114,7 +102,7 @@ func main() {
 		Addr: cfg.HTTPS.Listen,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
-			http3platform.AdvertiseHTTP3(cfg.HTTPS.HTTP3Port),
+			http3platform.AdvertiseHTTP3(cfg.HTTPS.AdvertiseHTTP3Port),
 			httpplatform.LogRequests(logger.With(slog.String("component", "advertise_http3"))),
 			httpplatform.AllowHosts(cfg.Cert.Domains),
 		),
@@ -133,15 +121,6 @@ func main() {
 		Addr:    cfg.HTTP.Listen,
 		Handler: redirectHandler,
 	}
-
-	relayUDPAddr := resolveUDPAddr(cfg.Relay.Listen)
-	eg.Go(func() error {
-		if err := relaySrv.ListenUDP(relayUDPAddr); err != nil {
-			return fmt.Errorf("listen relay: %w", err)
-		}
-
-		return nil
-	})
 
 	eg.Go(func() error {
 		if err := srvHTTP3.ListenAndServe(); err != nil {
@@ -183,7 +162,6 @@ func main() {
 		slog.Group("address",
 			slog.String("http", cfg.HTTP.Listen),
 			slog.String("https", cfg.HTTPS.Listen),
-			slog.String("relay", cfg.Relay.Listen),
 		),
 	)
 
@@ -192,10 +170,6 @@ func main() {
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := relaySrv.Close(); err != nil {
-		logger.Error("shutdown relay server", "error", err)
-	}
 
 	if err := srvHTTP3.Close(); err != nil {
 		logger.Error("shutdown HTTP/3 server", "error", err)
@@ -218,21 +192,18 @@ func main() {
 func parseConfig() config {
 	var cfg config
 	if err := env.Parse(&cfg); err != nil {
-		slog.Error("parse config", "error", err)
-		os.Exit(1)
+		abort("parse config", err)
 	}
 	cfg.SecretFromFile = strings.TrimSpace(cfg.SecretFromFile) // to remove trailing newlines
-
-	return cfg
-}
-
-func resolveUDPAddr(address string) *net.UDPAddr {
-	udpAddr, err := net.ResolveUDPAddr("udp", address)
-	if err != nil {
-		abort(fmt.Sprintf("resolve UDP address %q", address), err)
+	cfg.Secret = strings.TrimSpace(cfg.Secret)                 // to remove trailing newlines
+	if cfg.SecretFromFile == "" && cfg.Secret == "" {
+		abort("secret is required", errors.New("either SECRET_FILE or SECRET environment variable must be set"))
+	}
+	if cfg.SecretFromFile != "" {
+		cfg.Secret = cfg.SecretFromFile
 	}
 
-	return udpAddr
+	return cfg
 }
 
 func newTLSConfig(cfg certConfig) (*tls.Config, *autocert.Manager) {
