@@ -67,6 +67,10 @@ func (w *responseWriterWithStatus) Status() int {
 	return w.status
 }
 
+func (w *responseWriterWithStatus) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // AllowHosts allows requests only for the specified hosts.
 func AllowHosts(hosts []string) Middleware {
 	return func(handler http.Handler) http.Handler {

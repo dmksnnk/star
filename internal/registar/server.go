@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/control"
@@ -135,7 +136,15 @@ func (s *Server) Register(w http.ResponseWriter, r *http.Request, key auth.Key, 
 	}
 
 	// overtake the stream
-	str := w.(http3.HTTPStreamer).HTTPStream()
+	rc := http3platform.NewResponseController(w)
+	str, err := rc.HTTPStream()
+	if err != nil {
+		s.Logger.Error("overtake HTTP3 stream", "err", err)
+		str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		return
+	}
+
 	if isHost {
 		s.registerHost(str, key, addrs)
 		return
@@ -248,7 +257,14 @@ func (s *Server) Relay(w http.ResponseWriter, r *http.Request, sessionID string)
 	}
 
 	w.WriteHeader(http.StatusOK)
-	str := w.(http3.HTTPStreamer).HTTPStream()
+	rc := http3platform.NewResponseController(w)
+	str, err := rc.HTTPStream()
+	if err != nil {
+		s.Logger.Error("overtake HTTP3 stream", "err", err)
+		str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+		return
+	}
 
 	s.relayMu.Lock()
 	if waiting, ok := s.relayWaiting[sessionID]; ok {
