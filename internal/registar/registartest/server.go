@@ -1,4 +1,4 @@
-package integrationtest
+package registartest
 
 import (
 	"crypto/tls"
@@ -7,23 +7,25 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"testing"
 
-	"github.com/dmksnnk/star/internal/discovery"
 	"github.com/dmksnnk/star/internal/platform/http3platform/http3test"
 	"github.com/dmksnnk/star/internal/registar"
-	"github.com/dmksnnk/star/internal/relay"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 )
 
-func NewServer(t *testing.T, reg registar.Registar, secret []byte) *Server {
+func NewServer(t *testing.T, secret []byte) *Server {
 	t.Helper()
 
-	srv := registar.NewServer(reg)
+	root, err := registar.NewRootCA()
+	if err != nil {
+		t.Fatalf("create root CA: %s", err)
+	}
+
+	srv := registar.NewServer(registar.NewAuthority(root))
 	srv.Logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	srv.H3.Handler = registar.NewRouter(srv, secret)
 
@@ -51,12 +53,14 @@ func NewServer(t *testing.T, reg registar.Registar, secret []byte) *Server {
 	})
 
 	return &Server{
+		Srv:  srv,
 		ca:   ca,
 		conn: conn,
 	}
 }
 
 type Server struct {
+	Srv  *registar.Server
 	ca   *x509.Certificate
 	conn *net.UDPConn
 }
@@ -78,60 +82,21 @@ func (s *Server) URL() *url.URL {
 	}
 }
 
-func NewRegistar(t *testing.T) *registar.Registar2 {
-	relay, relayAddr := ServeRelay(t)
+var localhost = net.IPv4(127, 0, 0, 1)
 
-	rootCA, err := registar.NewRootCA()
+func NewLocalUDPConn(t *testing.T) *net.UDPConn {
+	t.Helper()
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 	if err != nil {
-		t.Fatalf("NewRootCA: %s", err)
+		t.Fatalf("listen UDP: %s", err)
 	}
-	authority := registar.NewAuthority(rootCA)
-
-	return registar.NewRegistar2(authority, relayAddr, relay)
-}
-
-func ServeDiscovery(t *testing.T) netip.AddrPort {
-	conn := NewLocalUDPConn(t)
-
-	d := discovery.NewServer()
-
-	var eg errgroup.Group
-	eg.Go(func() error {
-		return d.Serve(conn)
-	})
 
 	t.Cleanup(func() {
-		if err := d.Close(); err != nil {
-			t.Errorf("close discovery server: %v", err)
-		}
-
-		if err := eg.Wait(); err != nil {
-			t.Fatalf("serve discovery: %s", err)
+		if err := conn.Close(); err != nil {
+			t.Errorf("close UDP conn: %v", err)
 		}
 	})
 
-	return conn.LocalAddr().(*net.UDPAddr).AddrPort()
-}
-
-func ServeRelay(t *testing.T, ops ...relay.Option) (*relay.UDPRelay, netip.AddrPort) {
-	conn := NewLocalUDPConn(t)
-
-	r := relay.NewUDPRelay(ops...)
-
-	var eg errgroup.Group
-	eg.Go(func() error {
-		return r.Serve(conn)
-	})
-
-	t.Cleanup(func() {
-		if err := r.Close(); err != nil {
-			t.Errorf("close relay: %v", err)
-		}
-
-		if err := eg.Wait(); err != nil {
-			t.Errorf("serve relay: %s", err)
-		}
-	})
-
-	return r, conn.LocalAddr().(*net.UDPAddr).AddrPort()
+	return conn
 }

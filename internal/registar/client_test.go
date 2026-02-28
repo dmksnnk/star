@@ -1,188 +1,359 @@
 package registar_test
 
 import (
+	"bytes"
 	"context"
-	"crypto/x509"
-	"fmt"
+	"errors"
 	"net"
-	"net/netip"
-	"sync"
 	"testing"
+	"time"
 
-	"github.com/dmksnnk/star/internal/cert"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
-	"github.com/dmksnnk/star/internal/registar/control"
-	"github.com/dmksnnk/star/internal/registar/integrationtest"
-	"github.com/quic-go/quic-go"
+	"github.com/dmksnnk/star/internal/registar/registartest"
+	"go.uber.org/goleak"
+	"golang.org/x/sync/errgroup"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 var secret = []byte("secret")
 
-func TestRegisterHost(t *testing.T) {
-	reg := newFakeRegistar()
-	srv := integrationtest.NewServer(t, reg, secret)
-	key := auth.NewKey()
+var localhost = net.IPv4(127, 0, 0, 1)
 
-	token := auth.NewToken(key, secret)
-
-	tr := &quic.Transport{Conn: integrationtest.NewLocalUDPConn(t)}
-	cc := registar.ClientConfig{
-		TLSConfig: srv.TLSConfig(),
-	}
-	clientConn, _, err := cc.Host(context.TODO(), tr, srv.URL(), token)
-	if err != nil {
-		t.Fatalf("register client: %s", err)
-	}
-
-	wantCommand := control.ConnectCommand{
-		PrivateAddress: netip.MustParseAddrPort("192.168.0.1:1234"),
-		PublicAddress:  netip.MustParseAddrPort("192.168.0.2:5678"),
-	}
-
-	agent := control.NewAgent()
-	agentCalled := make(chan struct{})
-	agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
-		defer close(agentCalled)
-
-		if cmd != wantCommand {
-			t.Errorf("expected command %+v, got %+v", wantCommand, cmd)
+func TestHoster(t *testing.T) {
+	t.Run("registers and disconnects", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+		hostConnected := make(chan struct{})
+		hostDisconnected := make(chan struct{})
+		srv.Srv.HostConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostConnected)
+		}
+		srv.Srv.HostDisconnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostDisconnected)
 		}
 
-		return true, nil
-	})
-	integrationtest.ServeAgent(t, agent, clientConn)
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
 
-	host, ok := reg.host(key)
-	if !ok {
-		t.Fatalf("host not registered")
-	}
-
-	err = host.ConnectTo(context.TODO(), wantCommand.PublicAddress, wantCommand.PrivateAddress)
-	if err != nil {
-		t.Fatalf("ConnectTo: %s", err)
-	}
-
-	<-agentCalled
-}
-
-func TestRegisterJoin(t *testing.T) {
-	reg := newFakeRegistar()
-	srv := integrationtest.NewServer(t, reg, secret)
-	key := auth.NewKey()
-
-	token := auth.NewToken(key, secret)
-
-	tr := &quic.Transport{Conn: integrationtest.NewLocalUDPConn(t)}
-	cc := registar.ClientConfig{
-		TLSConfig: srv.TLSConfig(),
-	}
-	clientConn, _, err := cc.Join(context.TODO(), tr, srv.URL(), token)
-	if err != nil {
-		t.Fatalf("Join: %s", err)
-	}
-
-	wantCommand := control.ConnectCommand{
-		PrivateAddress: netip.MustParseAddrPort("192.168.0.1:1234"),
-		PublicAddress:  netip.MustParseAddrPort("192.168.0.2:5678"),
-	}
-
-	agent := control.NewAgent()
-	agentCalled := make(chan struct{})
-	agent.OnConnectTo(func(ctx context.Context, cmd control.ConnectCommand) (bool, error) {
-		defer close(agentCalled)
-
-		if cmd != wantCommand {
-			t.Errorf("expected command %+v, got %+v", wantCommand, cmd)
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		hoster, err := cc.NewHoster(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("Host: %s", err)
 		}
 
-		return true, nil
+		wait(t, hostConnected, "host did not connect")
+
+		if err := hoster.Close(); err != nil {
+			t.Errorf("close hoster: %s", err)
+		}
+
+		wait(t, hostDisconnected, "host did not disconnect")
 	})
-	integrationtest.ServeAgent(t, agent, clientConn)
 
-	peer, ok := reg.peer(key)
-	if !ok {
-		t.Fatalf("peer not registered")
+	t.Run("accept cancelled", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		hoster, err := cc.NewHoster(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("Host: %s", err)
+		}
+		t.Cleanup(func() {
+			if err := hoster.Close(); err != nil {
+				t.Errorf("close hoster: %s", err)
+			}
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = hoster.Accept(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Accept: expected context.Canceled, got: %v", err)
+		}
+	})
+
+	t.Run("register second time", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+		hostConnected := make(chan struct{})
+		srv.Srv.HostConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostConnected)
+		}
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		hoster, err := cc.NewHoster(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("Host: %s", err)
+		}
+		t.Cleanup(func() {
+			if err := hoster.Close(); err != nil {
+				t.Errorf("close hoster: %s", err)
+			}
+		})
+
+		wait(t, hostConnected, "host did not connect")
+
+		_, err = cc.NewHoster(context.TODO(), srv.URL(), token)
+		if !errors.Is(err, registar.ErrHostAlreadyRegistered) {
+			t.Errorf("Host: expected host already registered error, got: %s", err)
+		}
+	})
+}
+
+func TestJoiner(t *testing.T) {
+	t.Run("host not found", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		joiner, err := cc.NewJoiner(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("NewJoiner: %s", err)
+		}
+
+		_, err = joiner.Join(context.TODO())
+		if !errors.Is(err, registar.ErrHostNotFound) {
+			t.Errorf("Join: expected host not found error, got: %s", err)
+		}
+
+		if err := joiner.Close(); err != nil {
+			t.Errorf("close joiner: %s", err)
+		}
+	})
+
+	t.Run("join cancelled", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		joiner, err := cc.NewJoiner(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("NewJoiner: %s", err)
+		}
+		t.Cleanup(func() {
+			if err := joiner.Close(); err != nil {
+				t.Errorf("close joiner: %s", err)
+			}
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err = joiner.Join(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Join: expected context.Canceled, got: %v", err)
+		}
+	})
+
+	t.Run("connects to host", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+		hostConnected := make(chan struct{})
+		hostDisconnected := make(chan struct{})
+		peerConnected := make(chan struct{})
+		srv.Srv.HostConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostConnected)
+		}
+		srv.Srv.HostDisconnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostDisconnected)
+		}
+		srv.Srv.PeerConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(peerConnected)
+		}
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
+		}
+		hoster, err := cc.NewHoster(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("Host: %s", err)
+		}
+
+		wait(t, hostConnected, "host did not connect")
+
+		var eg errgroup.Group
+		hostConn := make(chan registar.DatagramConn)
+		eg.Go(func() error {
+			conn, err := hoster.Accept(context.TODO())
+			if err != nil {
+				return err
+			}
+
+			hostConn <- conn
+			return nil
+		})
+
+		joiner, err := cc.NewJoiner(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("NewJoiner: %s", err)
+		}
+
+		peerConn, err := joiner.Join(context.TODO())
+		if err != nil {
+			t.Fatalf("Join: %s", err)
+		}
+
+		wait(t, peerConnected, "connection was not established")
+
+		testDatagramConn(t, <-hostConn, peerConn)
+
+		if err := joiner.Close(); err != nil {
+			t.Errorf("close joiner: %s", err)
+		}
+
+		if err := hoster.Close(); err != nil {
+			t.Errorf("close hoster: %s", err)
+		}
+
+		wait(t, hostDisconnected, "host did not disconnect")
+
+		if err := eg.Wait(); err != nil {
+			t.Errorf("wait for host accept: %s", err)
+		}
+	})
+
+	t.Run("connects to host via relay", func(t *testing.T) {
+		srv := registartest.NewServer(t, secret)
+		hostConnected := make(chan struct{})
+		hostDisconnected := make(chan struct{})
+		peerConnected := make(chan struct{})
+		srv.Srv.HostConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostConnected)
+		}
+		srv.Srv.HostDisconnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(hostDisconnected)
+		}
+		srv.Srv.PeerConnected = func(key auth.Key, addrs registar.AddrPair) {
+			close(peerConnected)
+		}
+
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
+
+		cc := registar.ClientConfig{
+			TLSConfig:  srv.TLSConfig(),
+			ListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
+			DisableP2P: true,
+		}
+		hoster, err := cc.NewHoster(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("Host: %s", err)
+		}
+
+		wait(t, hostConnected, "host did not connect")
+
+		var eg errgroup.Group
+		hostConn := make(chan registar.DatagramConn)
+		eg.Go(func() error {
+			conn, err := hoster.Accept(context.TODO())
+			if err != nil {
+				return err
+			}
+
+			hostConn <- conn
+			return nil
+		})
+
+		joiner, err := cc.NewJoiner(context.TODO(), srv.URL(), token)
+		if err != nil {
+			t.Fatalf("NewJoiner: %s", err)
+		}
+
+		peerConn, err := joiner.Join(context.TODO())
+		if err != nil {
+			t.Fatalf("Join: %s", err)
+		}
+
+		wait(t, peerConnected, "connection was not established")
+
+		testDatagramConn(t, <-hostConn, peerConn)
+
+		if err := joiner.Close(); err != nil {
+			t.Errorf("close joiner: %s", err)
+		}
+
+		if err := hoster.Close(); err != nil {
+			t.Errorf("close hoster: %s", err)
+		}
+
+		wait(t, hostDisconnected, "host did not disconnect")
+
+		if err := eg.Wait(); err != nil {
+			t.Errorf("wait for host accept: %s", err)
+		}
+	})
+}
+
+func testDatagramConn(t *testing.T, connA, connB registar.DatagramConn) {
+	t.Helper()
+
+	ctx := context.TODO()
+
+	msgAB := []byte("hello from A to B")
+	if err := connA.SendDatagram(msgAB); err != nil {
+		t.Fatalf("connA.SendDatagram: %s", err)
 	}
-
-	err = peer.ConnectTo(context.TODO(), wantCommand.PublicAddress, wantCommand.PrivateAddress)
+	got, err := connB.ReceiveDatagram(ctx)
 	if err != nil {
-		t.Fatalf("ConnectTo: %s", err)
+		t.Fatalf("connB.ReceiveDatagram: %s", err)
+	}
+	if !bytes.Equal(got, msgAB) {
+		t.Errorf("connB received %q, want %q", got, msgAB)
 	}
 
-	<-agentCalled
-}
-
-type fakeRegistar struct {
-	mux   sync.Mutex
-	hosts map[auth.Key]registar.Peer
-	peers map[auth.Key]registar.Peer
-}
-
-func newFakeRegistar() *fakeRegistar {
-	return &fakeRegistar{
-		hosts: make(map[auth.Key]registar.Peer),
-		peers: make(map[auth.Key]registar.Peer),
+	msgBA := []byte("hello from B to A")
+	if err := connB.SendDatagram(msgBA); err != nil {
+		t.Fatalf("connB.SendDatagram: %s", err)
 	}
-}
-
-func (f *fakeRegistar) NewSessionCert(key auth.Key, csr *x509.CertificateRequest) (*x509.Certificate, *x509.Certificate, error) {
-	ca, caPrivKey, err := cert.NewCA()
+	got, err = connA.ReceiveDatagram(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create CA: %w", err)
+		t.Fatalf("connA.ReceiveDatagram: %s", err)
+	}
+	if !bytes.Equal(got, msgBA) {
+		t.Errorf("connA received %q, want %q", got, msgBA)
+	}
+}
+
+func wait[T any](t *testing.T, ch <-chan T, msg string) T {
+	t.Helper()
+
+	var v T
+	select {
+	case v = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout: %s", msg)
 	}
 
-	privkey, err := cert.NewPrivateKey()
-	if err != nil {
-		return nil, nil, fmt.Errorf("create private key: %w", err)
-	}
-
-	peerCert, err := cert.NewIPCert(ca, caPrivKey, privkey.Public(), net.IPv4(127, 0, 0, 1))
-	if err != nil {
-		return nil, nil, fmt.Errorf("create IP cert: %w", err)
-	}
-
-	x509PeerCert, err := x509.ParseCertificate(peerCert)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse peer certificate: %w", err)
-	}
-
-	return ca, x509PeerCert, nil
-}
-
-func (f *fakeRegistar) Host(ctx context.Context, key auth.Key, peer registar.Peer) error {
-	f.mux.Lock()
-	defer f.mux.Unlock()
-
-	f.hosts[key] = peer
-
-	return nil
-}
-
-func (f *fakeRegistar) Join(ctx context.Context, key auth.Key, peer registar.Peer) error {
-	f.mux.Lock()
-	defer f.mux.Unlock()
-
-	f.peers[key] = peer
-	return nil
-}
-
-func (f *fakeRegistar) Close() error {
-	return nil
-}
-
-func (f *fakeRegistar) host(key auth.Key) (registar.Peer, bool) {
-	f.mux.Lock()
-	defer f.mux.Unlock()
-
-	c, ok := f.hosts[key]
-	return c, ok
-}
-
-func (f *fakeRegistar) peer(key auth.Key) (registar.Peer, bool) {
-	f.mux.Lock()
-	defer f.mux.Unlock()
-
-	c, ok := f.peers[key]
-	return c, ok
+	return v
 }
