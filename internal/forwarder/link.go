@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/quic-go/quic-go"
+	"github.com/dmksnnk/star/internal/registar"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -25,7 +25,7 @@ type linkConfig struct {
 	UDPIdleTimeout time.Duration
 }
 
-func (lc linkConfig) link(ctx context.Context, udpConn net.Conn, quicConn *quic.Conn) error {
+func (lc linkConfig) link(ctx context.Context, udpConn net.Conn, dgConn registar.DatagramConn) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
@@ -36,7 +36,7 @@ func (lc linkConfig) link(ctx context.Context, udpConn net.Conn, quicConn *quic.
 				return fmt.Errorf("read from udp conn: %w", err)
 			}
 
-			if err := quicConn.SendDatagram(buf[:n]); err != nil {
+			if err := dgConn.SendDatagram(buf[:n]); err != nil {
 				return fmt.Errorf("send datagram: %w", err)
 			}
 		}
@@ -44,7 +44,7 @@ func (lc linkConfig) link(ctx context.Context, udpConn net.Conn, quicConn *quic.
 
 	eg.Go(func() error {
 		for {
-			dg, err := quicConn.ReceiveDatagram(ctx)
+			dg, err := dgConn.ReceiveDatagram(ctx)
 			if err != nil {
 				return fmt.Errorf("receive datagram: %w", err)
 			}
