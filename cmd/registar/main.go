@@ -71,8 +71,6 @@ func main() {
 
 	logger.DebugContext(ctx, "load config", slog.Any("config", cfg))
 
-	eg, ctx := errgroup.WithContext(ctx)
-
 	rootCA, err := registar.NewRootCA()
 	if err != nil {
 		abort("create root CA", err)
@@ -121,6 +119,11 @@ func main() {
 		Addr:    cfg.HTTP.Listen,
 		Handler: redirectHandler,
 	}
+
+	// suppress quic-go's warning
+	os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
+
+	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
 		if err := srvHTTP3.ListenAndServe(); err != nil {

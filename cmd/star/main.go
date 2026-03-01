@@ -44,6 +44,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// suppress quic-go's warning
+	os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
+
 	switch cfg.Command {
 	case "host":
 		var hostCfg hostConfig
