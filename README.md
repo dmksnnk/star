@@ -34,7 +34,7 @@ volumes:
   certs:
 ```
 
-See [Registar Server](#registar-server) for all configuration options.
+See [Registar Server Configuration](#registar-server-configuration) for all configuration options.
 
 #### Deploying Behind a Reverse Proxy
 
