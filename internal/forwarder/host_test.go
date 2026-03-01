@@ -21,7 +21,6 @@ import (
 
 var (
 	secret    = []byte("secret")
-	token     = auth.NewToken(auth.NewKey(), secret)
 	logger    = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	localhost = net.IPv4(127, 0, 0, 1)
 )
@@ -47,6 +46,8 @@ func TestRunHost(t *testing.T) {
 	}
 
 	t.Run("host not found", func(t *testing.T) {
+		token := auth.NewToken(auth.NewKey(), secret)
+
 		_, err := peerCfg.Join(context.TODO(), srv.URL(), token)
 		if !errors.Is(err, registar.ErrHostNotFound) {
 			t.Errorf("Join: expected ErrHostNotFound, got: %v", err)
@@ -54,6 +55,8 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("stops on Close", func(t *testing.T) {
+		token := auth.NewToken(auth.NewKey(), secret)
+
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
@@ -118,6 +121,8 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("peer reconnects game", func(t *testing.T) {
+		token := auth.NewToken(auth.NewKey(), secret)
+
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
@@ -199,6 +204,8 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("stops on context cancel after game connected", func(t *testing.T) {
+		token := auth.NewToken(auth.NewKey(), secret)
+
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
@@ -268,6 +275,8 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("stops on context cancel before game connected", func(t *testing.T) {
+		token := auth.NewToken(auth.NewKey(), secret)
+
 		host, err := hostCfg.Register(
 			context.TODO(),
 			srv.URL(),
