@@ -71,7 +71,7 @@ type Server struct {
 
 	caAuthority *Authority
 	hostsMu     sync.RWMutex
-	hosts       map[auth.Key]agent
+	hosts       map[auth.Key]*agent
 
 	relayMu      sync.Mutex
 	relayWaiting map[string]waitingSession
@@ -94,7 +94,7 @@ func NewServer(ca *Authority) *Server {
 		ctxCancel:       cancel,
 		registeredConns: make(map[*quic.Conn]struct{}),
 		caAuthority:     ca,
-		hosts:           make(map[auth.Key]agent),
+		hosts:           make(map[auth.Key]*agent),
 		relayWaiting:    make(map[string]waitingSession),
 	}
 }
@@ -211,8 +211,12 @@ func (s *Server) connectPeer(str *http3.Stream, key auth.Key, addrs AddrPair) {
 		str.CancelWrite(errCode)
 	}()
 
+	// lock the host during setup to avoid concurrent connection attempts
+	host.mu.Lock()
+	defer host.mu.Unlock()
+
 	// overtake the stream
-	peer := agent{
+	peer := &agent{
 		str:   str,
 		addrs: addrs,
 	}

@@ -18,16 +18,17 @@ type AddrPair struct {
 type agent struct {
 	str   *http3.Stream
 	addrs AddrPair
+	mu    sync.Mutex
 }
 
-func newAgent(str *http3.Stream, addrs AddrPair) agent {
-	return agent{
+func newAgent(str *http3.Stream, addrs AddrPair) *agent {
+	return &agent{
 		str:   str,
 		addrs: addrs,
 	}
 }
 
-func initP2P(host, peer agent) error {
+func initP2P(host, peer *agent) error {
 	var hostErr, peerErr error
 	var wg sync.WaitGroup
 
