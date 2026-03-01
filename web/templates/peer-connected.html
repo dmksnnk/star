@@ -10,14 +10,13 @@
         </div>
     </div>
 
-    <div class="nes-field">
-        <label>Logs</label>
-        <div class="logs-terminal" id="logs"></div>
+    <div class="actions">
+        <form method="POST" action="/peer/stop">
+            <button type="submit" class="nes-btn is-error">Disconnect</button>
+        </form>
+        <button type="button" class="nes-btn is-normal" onclick="toggleLogs(this)">Logs</button>
     </div>
-
-    <form method="POST" action="/peer/stop">
-        <button type="submit" class="nes-btn is-error">Disconnect</button>
-    </form>
+    <div class="logs-terminal" id="logs" hidden></div>
 </div>
 
 <script>
@@ -36,13 +35,18 @@
         });
     }
 
+    function toggleLogs(btn) {
+        const logs = document.getElementById('logs');
+        logs.hidden = !logs.hidden;
+    }
+
     const logs = document.getElementById('logs');
     const eventSource = new EventSource('/logs');
     eventSource.onmessage = function(event) {
         const line = document.createElement('div');
         line.textContent = event.data;
         logs.appendChild(line);
-        logs.scrollTop = logs.scrollHeight;
+        if (!logs.hidden) logs.scrollTop = logs.scrollHeight;
     };
 </script>
 {{end}}
