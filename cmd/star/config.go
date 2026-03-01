@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 
@@ -28,6 +29,7 @@ type commandConfig struct {
 	Registar textURL
 	Port     int
 	CaCert   string
+	LogLevel slog.Level
 }
 
 func (c *commandConfig) Parse(args []string) error {
@@ -36,6 +38,7 @@ func (c *commandConfig) Parse(args []string) error {
 	c.FS.TextVar(&c.Registar, "registar", textURL{}, "registar URL")
 	c.FS.IntVar(&c.Port, "port", 0, "port to listen on, if not set, listen on system assigned port")
 	c.FS.StringVar(&c.CaCert, "ca-cert", "", "path to CA certificate for registar")
+	c.FS.TextVar(&c.LogLevel, "log-level", slog.LevelInfo, "log level (DEBUG, INFO, WARN, ERROR)")
 	c.FS.Usage = func() {
 		fmt.Fprintln(c.FS.Output()) // newline
 		fmt.Fprintln(c.FS.Output(), "Usage: star (starts web UI)\n       star [OPTIONS] COMMAND")

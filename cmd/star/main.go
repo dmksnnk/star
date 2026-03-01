@@ -26,10 +26,8 @@ func main() {
 	ctx, close := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer close()
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
 	if len(os.Args) < 2 {
-		runWeb(ctx, logger)
+		runWeb(ctx)
 		return
 	}
 
@@ -37,6 +35,8 @@ func main() {
 	if err := cfg.Parse(os.Args[1:]); err != nil {
 		abort(cfg.FS, err)
 	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 
 	tlsConfig, err := loadTLSConfig(cfg.CaCert)
 	if err != nil {
@@ -116,7 +116,8 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 	}
 	defer peer.Close()
 
-	logger.Info("peer listening", "addr", peer.UDPAddr().String())
+	logger.Debug("peer listening", "addr", peer.UDPAddr().String())
+	fmt.Printf("\n⭐ Connect your game to: %s\n\n", peer.UDPAddr().String())
 
 	if err := peer.AcceptAndLink(ctx); err != nil {
 		logger.Error("accept and link", "error", err)
@@ -164,11 +165,18 @@ func loadCACert(path string) (*x509.Certificate, error) {
 	return caCert, nil
 }
 
-func runWeb(ctx context.Context, logger *slog.Logger) {
+func runWeb(ctx context.Context) {
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:0"
 	}
+
+	logLevel := slog.LevelInfo
+	if logLevelStr := os.Getenv("LOG_LEVEL"); logLevelStr != "" {
+		_ = logLevel.UnmarshalText([]byte(logLevelStr))
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 
 	srv, err := webserver.New()
 	if err != nil {
