@@ -79,8 +79,10 @@ func (h *SSEHandler) Subscribe() ([]string, chan string) {
 func (h *SSEHandler) Unsubscribe(ch chan string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.subscribers, ch)
-	close(ch)
+	if _, ok := h.subscribers[ch]; ok {
+		delete(h.subscribers, ch)
+		close(ch)
+	}
 }
 
 // Reset clears the buffer and disconnects all subscribers.
