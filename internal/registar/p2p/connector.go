@@ -88,12 +88,12 @@ func (c *Connector) Connect(ctx context.Context, public, private netip.AddrPort)
 	})
 
 	eg.Go(func() error {
-		return c.dialLoop(attemptsCtx, public, connected)
+		return c.dialLoop(attemptsCtx, private, connected)
 	})
 
-	if public.Compare(private) != 0 {
+	if private.Compare(public) != 0 {
 		eg.Go(func() error {
-			return c.dialLoop(attemptsCtx, private, connected)
+			return c.dialLoop(attemptsCtx, public, connected)
 		})
 	}
 
