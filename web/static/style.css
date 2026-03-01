@@ -1,9 +1,4 @@
 /* Page layout */
-body {
-    margin: 0;
-    background: #fff;
-}
-
 .container {
     max-width: 700px;
     margin: 0 auto;
@@ -34,9 +29,8 @@ body {
 }
 
 /* Content containers */
-.nes-container.with-title {
-    width: 100%;
-    text-align: left;
+main {
+    align-self: stretch;
 }
 
 /* Form fields */
@@ -65,15 +59,19 @@ body {
     margin-top: 32px;
 }
 
-.actions .nes-btn {
+.actions .nes-btn,
+.actions form {
     flex: 1;
+}
+
+.actions form .nes-btn {
+    width: 100%;
 }
 
 /* Copy row (input + copy button) */
 .copy-row {
     display: flex;
     gap: 8px;
-    align-items: stretch;
 }
 
 .copy-row .nes-input {
@@ -94,9 +92,10 @@ body {
     font-size: 0.65rem;
     line-height: 1.6;
     padding: 12px;
+    margin-top: 16px;
     height: 240px;
     overflow-y: scroll;
-    image-rendering: pixelated;
+    overflow-x: hidden;
 }
 
 .logs-terminal div {
@@ -131,23 +130,23 @@ body {
     text-align: left;
 }
 
-/* Collapsible advanced options */
-.advanced-options {
+/* Collapsible sections */
+.collapsible {
     margin-top: 8px;
     margin-bottom: 8px;
 }
 
-.advanced-options summary {
+.collapsible summary {
     font-size: 0.75rem;
     padding: 6px 16px;
     display: inline-block;
 }
 
-.advanced-options .advanced-fields {
+.collapsible .advanced-fields {
     margin-top: 16px;
 }
 
-.advanced-options .nes-field:last-child {
+.collapsible .nes-field:last-child {
     margin-bottom: 0;
 }
 

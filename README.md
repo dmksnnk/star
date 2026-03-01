@@ -1,162 +1,267 @@
-# Star
+# Star ⭐
 
 Ever wanted to play a local game with a friend who is far away? Star makes local multiplayer games playable remotely!
 
-> [!WARNING]  
-> This project is a work in progress.
-
 ## How to Start
+
+The application comes with two components: Registar, a server that manages connectivity between players,
+and Star, a client that forwards UDP traffic. It has a GUI or can be used via CLI.
+
+While a publicly available server is not ready yet (but coming soon!),
+you can deploy your own Registar server and use it to connect with your friends.
 
 ### Deploy a Server
 
-1. Build the server:
+A pre-built Docker image is available at `ghcr.io/dmksnnk/star/registar`.
 
-    ```sh
-    make build registar
-    ```
-2. Copy the server binary to the target machine.
-3. Run the server:
-    ```sh
-    sudo SECRET=my-secret CERT_DOMAINS=my-domain.com ./registar
-    ```
+```yaml
+services:
+  registar:
+    image: ghcr.io/dmksnnk/star/registar:latest
+    restart: unless-stopped
+    environment:
+      - SECRET=your-secret-here        # or use SECRET_FILE with Docker secrets
+      - CERT_DOMAINS=your-domain.com
+      - CERT_DIR=/certs
+    ports:
+      - "80:80"          # HTTP unencrypted (redirects to HTTPS, used for ACME challenge)
+      - "443:443/tcp"    # HTTP on top of TCP with TLS
+      - "443:443/udp"    # HTTP/3 on top of UDP (QUIC)
+    volumes:
+      - certs:/certs
 
-    This will start a relay server named "registar", which listens on ports 80 and 443.
-    See more about registar [here](#registar-server).
+volumes:
+  certs:
+```
+
+See [Registar Server](#registar-server) for all configuration options.
+
+#### Deploying Behind a Reverse Proxy
+
+Registar runs three services:
+-  HTTP Server (TCP): Handles ACME challenges and redirects HTTP→HTTPS
+-  HTTPS Server (TCP): Serves HTTP/1.1 & HTTP/2 and advertises HTTP/3 support via `Alt-Svc`.
+-  HTTP/3 Server (UDP): Handles the actual QUIC game traffic.
+
+Since Registar uses HTTP/3 (QUIC), it manages its own TLS certificates (via Let's Encrypt).
+The parts that can be proxied are the HTTP and HTTPS servers,
+but the HTTP/3 server must listen directly on the public UDP port (443/UDP),
+because we need the client's public IP addresses for NAT hole-punching.
+
+- Traffic to HTTP Server (TCP) can be routed normally via the proxy to `HTTP_LISTEN` (e.g., `:8080`). This handles redirects and ACME.
+Do **not** enable `tlsChallenge` in Traefik - it intercepts TLS-ALPN-01 and Registar won't be able to complete its ACME challenge.
+Use `httpChallenge` instead.
+- Traffic to HTTPS Server (TCP) must be routed using **TCP Passthrough** to `HTTPS_LISTEN` (e.g., `:8443`).
+The proxy should not terminate TLS for this service, as Registar manages its own certificates.
+- Map the HTTP/3 Server UDP port directly to the host's public UDP port (e.g., `443:8443/udp`). This allows UDP traffic to coexist with Traefik's TCP traffic on port 443.
+
+Here is an example of how to do it with Traefik:
+
+**docker-compose.yaml** (registar service):
+```yaml
+services:
+  registar:
+    image: ghcr.io/dmksnnk/star/registar:latest
+    restart: unless-stopped
+    environment:
+      - HTTP_LISTEN=:8080
+      - HTTPS_LISTEN=:8443
+      - CERT_DIR=/certs
+      - CERT_DOMAINS=registar.example.com
+      - HTTPS_ADVERTISE_HTTP3_PORT=443   # advertise public UDP port for HTTP/3
+      - HTTPS_REDIRECT_PORT=443          # redirect to public HTTPS port
+      - SECRET_FILE=/run/secrets/registar_secret
+    ports:
+      - "443:8443/udp"   # HTTP/3 (QUIC) — bypasses Traefik (UDP not proxied)
+    volumes:
+      - certs:/certs
+    secrets:
+      - registar_secret
+
+volumes:
+  certs:
+
+secrets:
+  registar_secret:
+    file: ./registar_secret
+```
+
+**Traefik routes.yaml** (registar entries):
+```yaml
+http:
+  routers:
+    registar-http:
+      entryPoints: [web]
+      rule: "Host(`registar.example.com`)"
+      service: registar-http
+  services:
+    registar-http:
+      loadBalancer:
+        servers:
+          - url: "http://registar:8080"
+
+tcp:
+  routers:
+    registar:
+      entryPoints: [websecure]
+      rule: "HostSNI(`registar.example.com`)"
+      service: registar
+      tls:
+        passthrough: true   # registar handles TLS itself
+  services:
+    registar:
+      loadBalancer:
+        servers:
+          - address: "registar:8443"
+```
+
+**traefik.yaml** (important — use `httpChallenge`, not `tlsChallenge`):
+```yaml
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      httpChallenge:
+        entryPoint: web
+```
 
 ### Game Host
 
-1. Host the game.
-2. Run the client, click "Start a server" -> "Advanced settings."
-3. Select the game port on which the game runs.
-4. Enter the server's secret.
-5. Enter the server's URL.
-6. Click "Start".
+If you are hosting the game, follow these steps:
+
+1. Run the Star client. This should open a default browser.
+
+![Client home screen](./_screenshots/home.png)
+
+2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
+3. Click "Host a Game".
+4. Select a game from the list or enter a custom port to forward to.
+
+![Host screen](./_screenshots/host.png)
+
+6. Click "Start Hosting".
 7. Share the invite code with your friend.
+
+![Invite code screen](./_screenshots/invite.png)
 
 ### Game Peer
 
-1. Enter the invite code provided by the host.
-2. Connect to the game.
+If you want only join a game, follow these steps:
 
-## Registar Server
+1. Run the Star client. This should open a default browser.
 
-The registar server is a relay server that relays UDP traffic over HTTP/3 using DATAGRAMs. 
+![Client home screen](./_screenshots/home.png)
 
-### Features
+2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
+3. Click "Join a Game".
+4. Enter the invite code you received from the host and click "Connect".
 
-- Automatic TLS certificate management with Let's Encrypt.
-- Automatic redirects to HTTPS.
-- HTTP/3 advertisement.
+![Join screen](./_screenshots/join.png)
 
-### Configuration
+5. You will see the address where you can connect
 
-The server can be configured using the following environment variables:
+![Peer connected screen](./_screenshots/connected.png)
 
-- `SECRET` - A secret to prevent unauthorized connections to the server (required).
-- `LISTEN_ADDRESS` - The address to listen for HTTP traffic.
-- `LISTEN_TLS_ADDRESS` - The address to listen for HTTPS and HTTP/3 traffic.
-- `LOG_LEVEL` - The logging level (`INFO`, `DEBUG`).
-- `CERT_SELF_SIGNED` - If set to `true`, enerates and uses a self-signed certificate instead of Let's Encrypt. Useful for testing.
-- `CERT_DIR` - The path to the directory where certificates are stored.
-- `CERT_DOMAINS` - A comma-separated list of domains for which to issue certificates (required).
-- `CERT_IP_ADDRESS` - A comma-separated list of IP addresses for which to issue certificates.
+6. Connect the game client to that address, here is an example from Stardew Valley:
 
-## Clients
+![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
 
-Client is a simple WebView application that dynamically renders HTML pages using Go templates, served by a local HTTP server. See [screenshots](./_screenshots/) for a preview.
+
+## Registar Server Configuration
+
+The server is configured using environment variables:
+
+| Variable                     | Required                | Default     | Description                                                                 |
+|------------------------------|-------------------------|-------------|-----------------------------------------------------------------------------|
+| `SECRET`                     | Yes (or `SECRET_FILE`)  | —           | Shared secret to prevent unauthorized connections                           |
+| `SECRET_FILE`                | Yes (or `SECRET`)       | —           | Path to a file containing the secret                                        |
+| `LOG_LEVEL`                  | No                      | `INFO`      | Logging level: `INFO`, `DEBUG`                                              |
+| `HTTP_LISTEN`                | No                      | `:80`       | HTTP listen address (redirects to HTTPS)                                    |
+| `HTTPS_LISTEN`               | No                      | `:443`      | HTTPS and HTTP/3 listen address                                             |
+| `HTTPS_ADVERTISE_HTTP3_PORT` | No                      | `443`       | Port advertised via `Alt-Svc` for HTTP/3 upgrade                            |
+| `HTTPS_REDIRECT_PORT`        | No                      | `443`       | Port used in HTTP→HTTPS redirects                                           |
+| `CERT_SELF_SIGNED`           | No                      | `false`     | Use a self-signed certificate instead of Let's Encrypt (useful for testing) |
+| `CERT_DIR`                   | No                      | `certs`     | Directory where certificates are stored                                     |
+| `CERT_DOMAINS`               | Yes (for Let's Encrypt) | `localhost` | Comma-separated list of domains for the certificate                         |
+
+## Star CLI
+
+When run without arguments, Star starts a local web UI server and opens it in the browser.
+Set `LISTEN_ADDR` to override the default listen address (default: `127.0.0.1` with a system-assigned port).
+
+```
+star [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
+```
+
+### Global Options
+
+| Flag          | Required | Default | Description                                                                               |
+|---------------|----------|---------|-------------------------------------------------------------------------------------------|
+| `--secret`    | Yes      | —       | Shared secret matching the registar server's `SECRET`                                     |
+| `--registar`  | Yes      | —       | Registar server URL                                                                       |
+| `--port`      | No       | `0`     | Local UDP listen port; `0` means system-assigned                                          |
+| `--ca-cert`   | No       | —       | Path to a CA certificate file for the registar server (used for testing or custom setups) |
+| `--log-level` | No       | `INFO`  | Logging level: `DEBUG`, `INFO`, `WARN`, `ERROR`                                           |
+
+### Commands
+
+#### `host` — Host a Game
+
+```
+star [GLOBAL OPTIONS] host [OPTIONS]
+```
+
+| Flag     | Required | Default | Description                                                        |
+|----------|----------|---------|--------------------------------------------------------------------|
+| `--port` | No       | `24642` | Local game port to forward traffic to (defaults to Stardew Valley) |
+| `--key`  | No       | —       | Game key to register; if not set, a new key is generated           |
+
+After starting, the game key is printed to stdout. Share it with your friend.
+
+#### `peer` — Join a Game
+
+```
+star [GLOBAL OPTIONS] peer [OPTIONS]
+```
+
+| Flag            | Required | Default | Description                                                             |
+|-----------------|----------|---------|-------------------------------------------------------------------------|
+| `--key`         | Yes      | —       | Game key received from the host                                         |
+| `--listen-port` | No       | `0`     | Local UDP port to listen on for game traffic; `0` means system-assigned |
+
+After connecting, the local address to point your game client at is printed to stdout.
+
+### Examples
+
+Host a game on a custom port to forward traffic to:
+```sh
+star --secret mysecret --registar https://registar.example.com host --port 12345
+```
+
+Join a game:
+```sh
+star --secret mysecret --registar https://registar.example.com peer --key XXXX-XXXX
+```
+
 
 ## How It Works
 
-In summary, it is a relay server with two types of clients: host and peer. The host and peer connect to each other via this relay server. It operates on top of HTTP/3 and relays UDP traffic using HTTP/3 DATAGRAMs.
+The Registar server acts as a control server and a relay. When both sides join the server,
+it coordinates the NAT hole-punching to establish a direct P2P connection.
+If it fails, the server instructs both clients to initiate a relay connection,
+where the server forwards UDP traffic between them.
 
-<details>
-<summary>Diagram</summary>
+Everything above runs on top of QUIC/HTTP3, which makes every communication secured by TLS.
+For P2P connections, the server acts as a certificate authority (CA). It creates a new intermediate CA for each session and
+issues leaf certificates for both clients, so they can authenticate each other securely (mTLS).
 
-The mermaid diagram illustrates how the connection is established:
-
-1. The Host Forwarder registers itself with the Server and issues a new invite key.
-2. The Peer Forwarder waits for the Game Client to connect. On the first packet, it connects to the Server using the invite code.
-3. The Server then asks the Host Forwarder to initiate a new connection to the Game Host.
-4. The Host Forwarder and Peer Forwarder relay data between the Game Host and Game Client via the Server.
-
-```mermaid
-sequenceDiagram
-  participant Game Host as Game Host
-  participant Host Forwarder as Host Forwarder
-  participant Server as Server
-  participant Peer Forwarder as Peer Forwarder
-  participant Game Client as Game Client
-
-  Note left of Game Host: Game Host initiates connection
-  Host Forwarder ->> Server: CONNECT Register Game
-  Server ->>+ Host Forwarder: HTTP OK
-  rect rgb(191, 223, 255, 0.3)
-    Note right of Peer Forwarder: Game Client initiates connection
-    Game Client ->> Peer Forwarder: Connect Game
-    rect rgb(200, 150, 255, 0.3)
-      Peer Forwarder ->>+ Server: CONNECT Connect Game
-      
-      Server ->> Host Forwarder: CONNECT
-
-      Host Forwarder ->> Game Host: Dial
-      Host Forwarder ->> Server: CONNECT
-      Server ->> Host Forwarder: OK
-      Server <<-->> Host Forwarder: DATAGRAM stream
-
-      Server ->>- Peer Forwarder: HTTP OK
-      Server <<-->> Peer Forwarder: DATAGRAM stream
-    end
-
-  end
-  Note over Host Forwarder, Peer Forwarder: Server forwards data between two clients
-  Peer Forwarder ->> Game Client: Forward
-  Host Forwarder ->> Game Host: Forward
-
-```
-
-</details>
+The Star client is a UDP server that forwards UDP traffic over QUIC datagrams.
 
 ## Development
 
-### Cross-Compilation for Windows:
+TODO: add
 
-To compile webview for Windows, `mingw-w64` is required:
-
-```sh
-brew install mingw-w64
-```
-
-On Linux:
-
-```sh
-apt install binutils-mingw-w64 
-```
-
-Then build the app:
-
-```sh
-make build-webview-win
-```
-
-### Testing HTTP API
-
-Run the API:
-
-```sh
-SECRET=registar_secret LOG_LEVEL=DEBUG CERT_SELF_SIGNED=true go run ./cmd/registar/...
-```
-
-Here we tell our app to use a generated self-signed certificate: a certificate created by a self-signed Certificate Authority (CA).
-
-During initialization, the app will also create a `ca.crt` file: a self-signed CA certificate. Use it to verify the server's certificate.
-
-### HTTP/1 or HTTP/2
-
-Run in another terminal:
-
-```sh
-curl -Lv --cacert ca.crt http://localhost/-/health
-```
+See [p2ptest/README.md](./internal/registar/p2p/p2ptest/README.md) about running integrations
+tests for NAT hole-punching.
 
 ### HTTP/3
 

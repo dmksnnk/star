@@ -8,32 +8,9 @@ build-registar:
 	@echo "Building into $(BUILD_DIR)"
 	GOOS=linux GOARCH=amd64 go build -v -o $(BUILD_DIR)/registar ./cmd/registar/...
 
-.PHONY: build-cli-win
-build-cli-win:
-	GOOS=windows GOARCH=amd64 go build  -v -o $(BUILD_DIR)/star.exe ./cmd/star/...
-
-.PHONY: build-star-win
-build-star-win:
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ \
-		go build -ldflags "-H windowsgui" -v -o $(BUILD_DIR)/star-windows-amd64.exe ./cmd/webview/...
-
-.PHONY: build-star-linux
-build-star-linux:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-linux-gnu-gcc CXX=x86_64-linux-gnu-g++ \
-		go build -v -o $(BUILD_DIR)/star-linux-amd64 ./cmd/webview/...
-
-.PHONY: build-star-mac
-build-star-mac:
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
-		go build -v -o $(BUILD_DIR)/star-darwin-arm64 ./cmd/webview/...
-
 .PHONY: build-docker
 build-docker:
 	@docker build --platform linux/amd64 -f Dockerfile --tag=$(registar_image) .
-
-.PHONY: clean
-clean:
-	rm -r $(BUILD_DIR)
 
 .PHONY: golangci
 golangci:
