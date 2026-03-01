@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -56,10 +55,11 @@ type httpsConfig struct {
 
 type certConfig struct {
 	// SelfSigned indicates whether to use a self-signed certificate.
-	SelfSigned bool     `env:"CERT_SELF_SIGNED" envDefault:"false"`
-	Dir        string   `env:"CERT_DIR" envDefault:"certs"`
-	Domains    []string `env:"CERT_DOMAINS" envDefault:"localhost"`
-	IPAddress  []net.IP `env:"CERT_IP_ADDRESS"`
+	SelfSigned bool `env:"CERT_SELF_SIGNED" envDefault:"false"`
+	// Dir to store certificates.
+	Dir string `env:"CERT_DIR" envDefault:"certs"`
+	// Domains to request or generate certificates for.
+	Domains []string `env:"CERT_DOMAINS" envDefault:"localhost"`
 }
 
 func main() {
@@ -243,8 +243,7 @@ func selfSigned(cfg certConfig) (*tls.Config, error) {
 		Subject: pkix.Name{
 			Organization: []string{"Star"},
 		},
-		DNSNames:    cfg.Domains,
-		IPAddresses: cfg.IPAddress,
+		DNSNames: cfg.Domains,
 	}
 	reqDer, err := x509.CreateCertificateRequest(rand.Reader, template, srvPrivkey)
 	if err != nil {
