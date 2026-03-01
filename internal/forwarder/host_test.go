@@ -14,25 +14,24 @@ import (
 
 	"github.com/dmksnnk/star/internal/forwarder"
 	"github.com/dmksnnk/star/internal/registar/auth"
-	"github.com/dmksnnk/star/internal/registar/integrationtest"
+	"github.com/dmksnnk/star/internal/registar/registartest"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	secret = []byte("secret")
-	token  = auth.NewToken(auth.NewKey(), secret)
-	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	secret    = []byte("secret")
+	token     = auth.NewToken(auth.NewKey(), secret)
+	logger    = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	localhost = net.IPv4(127, 0, 0, 1)
 )
 
-// TODO: maybe move to integration tests
 func TestRunHost(t *testing.T) {
-	reg := integrationtest.NewRegistar(t)
-	srv := integrationtest.NewServer(t, reg, secret)
+	srv := registartest.NewServer(t, secret)
 
 	hostCfg := forwarder.HostConfig{
 		Logger:     logger,
 		TLSConfig:  srv.TLSConfig(),
-		ListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}, // localhost
+		ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
 		ErrHandlers: []func(error){
 			func(err error) {
 				t.Errorf("host error: %v", err)
@@ -41,13 +40,13 @@ func TestRunHost(t *testing.T) {
 	}
 
 	peerCfg := forwarder.PeerConfig{
-		Logger:             logger,
-		TLSConfig:          srv.TLSConfig(),
-		RegistarListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}, // localhost
+		Logger:     logger,
+		TLSConfig:  srv.TLSConfig(),
+		ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
 	}
 
 	t.Run("stops on Close", func(t *testing.T) {
-		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
 		}
@@ -111,7 +110,7 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("peer reconnects game", func(t *testing.T) {
-		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
 		}
@@ -126,10 +125,10 @@ func TestRunHost(t *testing.T) {
 		}
 
 		reconnectPeerCfg := forwarder.PeerConfig{
-			Logger:             logger,
-			TLSConfig:          srv.TLSConfig(),
-			RegistarListenAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0},
-			UDPIdleTimeout:     300 * time.Millisecond,
+			Logger:         logger,
+			TLSConfig:      srv.TLSConfig(),
+			ListenAddr:     &net.UDPAddr{IP: localhost, Port: 0},
+			UDPIdleTimeout: 300 * time.Millisecond,
 		}
 
 		peer, err := reconnectPeerCfg.Join(
@@ -192,7 +191,7 @@ func TestRunHost(t *testing.T) {
 	})
 
 	t.Run("stops on context cancel after game connected", func(t *testing.T) {
-		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})
 		if err != nil {
 			t.Fatalf("listen udp: %v", err)
 		}
@@ -283,7 +282,7 @@ func TestRunHost(t *testing.T) {
 		eg, ctx := errgroup.WithContext(ctx)
 
 		eg.Go(func() error {
-			err := host.AcceptAndLink(ctx, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
+			err := host.AcceptAndLink(ctx, &net.UDPAddr{IP: localhost, Port: 12345})
 			if !errors.Is(err, context.Canceled) {
 				return fmt.Errorf("host run: %w", err)
 			}

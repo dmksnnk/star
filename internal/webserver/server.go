@@ -271,10 +271,10 @@ func (s *Server) handlePeerStart(w http.ResponseWriter, r *http.Request) {
 
 	logger := slog.New(s.logHandler)
 	fwdCfg := forwarder.PeerConfig{
-		Logger:             logger,
-		TLSConfig:          s.sharedConfig.tlsConfig(),
-		RegistarListenAddr: &net.UDPAddr{Port: s.sharedConfig.Port},
-		GameListenPort:     cfg.GameListenPort,
+		Logger:         logger,
+		TLSConfig:      s.sharedConfig.tlsConfig(),
+		ListenAddr:     &net.UDPAddr{Port: s.sharedConfig.Port},
+		GameListenPort: cfg.GameListenPort,
 	}
 
 	token := auth.NewToken(cfg.InviteCode, []byte(s.sharedConfig.Secret))

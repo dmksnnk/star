@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/registar/integrationtest"
 	"github.com/dmksnnk/star/internal/relay"
 	"github.com/quic-go/quic-go"
 	"go.uber.org/goleak"
@@ -28,9 +28,9 @@ func TestMain(m *testing.M) {
 }
 
 func TestUDPRelay(t *testing.T) {
-	relayConn := integrationtest.NewLocalUDPConn(t)
-	clientAConn := integrationtest.NewLocalUDPConn(t)
-	clientBConn := integrationtest.NewLocalUDPConn(t)
+	relayConn := newLocalUDPConn(t)
+	clientAConn := newLocalUDPConn(t)
+	clientBConn := newLocalUDPConn(t)
 
 	relayAddr := relayConn.LocalAddr().(*net.UDPAddr).AddrPort()
 
@@ -114,10 +114,10 @@ func TestUDPRelay(t *testing.T) {
 }
 
 func TestUDPRelay_RelayQUICTraffic(t *testing.T) {
-	clientAConn := integrationtest.NewLocalUDPConn(t)
-	clientBConn := integrationtest.NewLocalUDPConn(t)
+	clientAConn := newLocalUDPConn(t)
+	clientBConn := newLocalUDPConn(t)
 
-	relay, relayAddr := integrationtest.ServeRelay(t)
+	relay, relayAddr := serveRelay(t)
 	relay.AddRoute(
 		clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
@@ -179,10 +179,10 @@ func TestUDPRelay_RelayQUICTraffic(t *testing.T) {
 }
 
 func TestUDPRelayAllocations(t *testing.T) {
-	clientAConn := integrationtest.NewLocalUDPConn(t)
-	clientBConn := integrationtest.NewLocalUDPConn(t)
+	clientAConn := newLocalUDPConn(t)
+	clientBConn := newLocalUDPConn(t)
 
-	relay, relayAddr := integrationtest.ServeRelay(t)
+	relay, relayAddr := serveRelay(t)
 	relay.AddRoute(
 		clientAConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		clientBConn.LocalAddr().(*net.UDPAddr).AddrPort(),
@@ -283,4 +283,44 @@ func generateTLSConfig(t *testing.T) (serverTLSConf *tls.Config, clientTLSConf *
 	}
 
 	return serverTLSConf, clientTLSConf
+}
+
+func newLocalUDPConn(t *testing.T) *net.UDPConn {
+	t.Helper()
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen UDP: %s", err)
+	}
+
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close UDP conn: %v", err)
+		}
+	})
+
+	return conn
+}
+
+func serveRelay(t *testing.T, ops ...relay.Option) (*relay.UDPRelay, netip.AddrPort) {
+	conn := newLocalUDPConn(t)
+
+	r := relay.NewUDPRelay(ops...)
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return r.Serve(conn)
+	})
+
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("close relay: %v", err)
+		}
+
+		if err := eg.Wait(); err != nil {
+			t.Errorf("serve relay: %s", err)
+		}
+	})
+
+	return r, conn.LocalAddr().(*net.UDPAddr).AddrPort()
 }

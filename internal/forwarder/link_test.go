@@ -2,44 +2,21 @@ package forwarder
 
 import (
 	"context"
-	"crypto"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/dmksnnk/star/internal/cert"
 	"github.com/dmksnnk/star/internal/platform/quictest"
 	"github.com/dmksnnk/star/internal/platform/udp"
+	"github.com/quic-go/quic-go"
 	"go.uber.org/goleak"
 	"golang.org/x/sync/errgroup"
 )
 
-var (
-	ca           *x509.Certificate
-	caPrivateKey crypto.PrivateKey
-)
-
 func TestMain(m *testing.M) {
-	var err error
-	ca, caPrivateKey, err = cert.NewCA()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create CA: %s", err)
-		os.Exit(1)
-	}
-
-	exitCode := m.Run()
-	if exitCode == 0 {
-		if err := goleak.Find(); err != nil {
-			fmt.Fprintf(os.Stderr, "goleak: %s", err)
-			exitCode = 1
-		}
-	}
-
-	os.Exit(exitCode)
+	goleak.VerifyTestMain(m)
 }
 
 func TestLink(t *testing.T) {
@@ -55,7 +32,7 @@ func TestLink(t *testing.T) {
 	var eg errgroup.Group
 	eg.Go(func() error {
 		lc := linkConfig{}
-		err := lc.link(ctx, udpSrv, quicSrv)
+		err := lc.link(ctx, udpSrv, newQUICConnDatagramConn(quicSrv))
 		if !errors.Is(err, context.Canceled) { // expecting context canceled error
 			return fmt.Errorf("link udpSrv and quicSrv: %w", err)
 		}
@@ -112,7 +89,7 @@ func TestLinkIdleTimeout(t *testing.T) {
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		return lc.link(ctx, udpSrv, quicSrv)
+		return lc.link(ctx, udpSrv, newQUICConnDatagramConn(quicSrv))
 	})
 
 	// Verify link works by sending data through.
@@ -153,4 +130,16 @@ func localUDPPipe(t *testing.T) (net.Conn, net.Conn) {
 	})
 
 	return c1, c2
+}
+
+type quicConnDatagramConn struct {
+	*quic.Conn
+}
+
+func newQUICConnDatagramConn(conn *quic.Conn) quicConnDatagramConn {
+	return quicConnDatagramConn{Conn: conn}
+}
+
+func (q quicConnDatagramConn) Close() error {
+	return q.CloseWithError(quic.ApplicationErrorCode(quic.NoError), "connection closed")
 }

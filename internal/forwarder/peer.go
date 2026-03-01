@@ -23,13 +23,13 @@ type PeerConfig struct {
 	// TLS config for calling registar.
 	// For tests it should should trust registar's cert
 	TLSConfig *tls.Config
-	// RegistarListenAddr specifies the local UDP address to listen on for incoming QUIC connections.
+	// ListenAddr specifies the local UDP address to listen on for incoming QUIC connections.
 	// If the IP field is nil or an unspecified IP address,
 	// PeerConfig listens on all available IP addresses of the local system
 	// except multicast IP addresses.
 	// If the Port is 0, a port number is automatically
 	// chosen.
-	RegistarListenAddr *net.UDPAddr
+	ListenAddr *net.UDPAddr
 	// GameListenPort specifies the local UDP port to listen on for incoming game connections.
 	// If 0, a port number is automatically chosen.
 	GameListenPort int
@@ -44,25 +44,20 @@ func (p PeerConfig) Join(
 	baseURL *url.URL,
 	token auth.Token,
 ) (*Peer, error) {
-	conn, err := net.ListenUDP("udp", p.RegistarListenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("listen UDP: %w", err)
-	}
-
-	tr := &quic.Transport{
-		Conn: conn,
-	}
-	cc := registar.ClientConfig{
-		TLSConfig: p.TLSConfig.Clone(),
-	}
-	ctrlConn, p2pTLSConf, err := cc.Join(ctx, tr, baseURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("join p2p: %w", err)
-	}
-
 	logger := p.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	cc := registar.ClientConfig{
+		TLSConfig:  p.TLSConfig.Clone(),
+		ListenAddr: p.ListenAddr,
+		Logger:     logger,
+	}
+
+	joiner, err := cc.NewJoiner(ctx, baseURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("create joiner: %w", err)
 	}
 
 	lc := udp.ListenConfig{
@@ -73,27 +68,13 @@ func (p PeerConfig) Join(
 		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
 
-	clc := ControlListenerConfig{
-		Logger: logger.With(slog.String("component", "ControlListener")),
-	}
-
 	udpIdleTimeout := p.UDPIdleTimeout
 	if udpIdleTimeout == 0 {
 		udpIdleTimeout = defaultUDPIdleTimeout
 	}
 
-	control := clc.ListenControl(ctrlConn, tr, p2pTLSConf)
-	hostConn, err := control.Accept(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("accept peer connection: %w", err)
-	}
-	defer control.Close()
-
-	logger.Debug("accepted host connection", "remote_addr", hostConn.RemoteAddr().String())
-
 	return &Peer{
-		transport:    tr,
-		hostConn:     hostConn,
+		joiner:       joiner,
 		gameListener: gameListener,
 		linkConfig:   linkConfig{UDPIdleTimeout: udpIdleTimeout},
 		logger:       logger,
@@ -101,8 +82,7 @@ func (p PeerConfig) Join(
 }
 
 type Peer struct {
-	transport    *quic.Transport
-	hostConn     *quic.Conn
+	joiner       *registar.Joiner
 	gameListener *udp.Listener
 	linkConfig   linkConfig
 
@@ -134,7 +114,13 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 
 		p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
 
-		if err := p.linkConfig.link(ctx, gameConn, p.hostConn); err != nil {
+		hostConn, err := p.joiner.Join(ctx)
+		if err != nil {
+			gameConn.Close()
+			return fmt.Errorf("join host: %w", err)
+		}
+
+		if err := p.linkConfig.link(ctx, gameConn, hostConn); err != nil {
 			if errors.Is(err, errLinkIdleTimeout) {
 				p.logger.Debug("link idle timeout, closing game connection")
 				gameConn.Close()
@@ -148,8 +134,7 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 				return nil
 			}
 
-			// TODO: meaningful error codes
-			p.hostConn.CloseWithError(0, fmt.Sprintf("link with game failed: %s", err))
+			hostConn.Close()
 			return fmt.Errorf("link with game: %w", err)
 		}
 	}
@@ -158,7 +143,6 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 func (p *Peer) Close() error {
 	return errors.Join(
 		p.gameListener.Close(),
-		// close transport last, otherwise it hangs waiting for client connection
-		p.transport.Close(),
+		p.joiner.Close(),
 	)
 }

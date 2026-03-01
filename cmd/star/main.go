@@ -103,10 +103,10 @@ func runPeer(ctx context.Context, cfg commandConfig, peerCfg peerConfig, logger 
 	token := auth.NewToken(peerCfg.Key, []byte(cfg.Secret))
 
 	fwdCfg := forwarder.PeerConfig{
-		Logger:             logger.With(slog.String("component", "peer")),
-		TLSConfig:          tlsConfig,
-		RegistarListenAddr: &net.UDPAddr{Port: cfg.Port},
-		GameListenPort:     peerCfg.GameListenPort,
+		Logger:         logger.With(slog.String("component", "peer")),
+		TLSConfig:      tlsConfig,
+		ListenAddr:     &net.UDPAddr{Port: cfg.Port},
+		GameListenPort: peerCfg.GameListenPort,
 	}
 
 	peer, err := fwdCfg.Join(ctx, cfg.Registar.URL, token)

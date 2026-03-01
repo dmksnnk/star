@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/quic-go/quic-go"
-	"golang.org/x/sync/errgroup"
 )
 
 const StatusCodeConnectFailed = http.StatusPreconditionFailed
@@ -51,47 +48,38 @@ func (a *Agent) OnConnectTo(f func(ctx context.Context, cmd ConnectCommand) (boo
 	})
 }
 
-// Serve serves the connection.
-// To stop the Agent, connection should be closed.
-func (a *Agent) Serve(conn *quic.Conn) error {
-	eg, ctx := errgroup.WithContext(conn.Context())
-	eg.Go(func() error {
-		// Accept connection until server is closed.
-		// If connection gets overtaken, it will only open new streams,
-		// so it is OK to keep accepting for other streams.
-		for {
-			str, err := conn.AcceptStream(ctx)
-			if err != nil { // server context closed or error
-				return fmt.Errorf("accept stream: %w", err)
-			}
+func (a *Agent) OnConnectViaRelay(f func(ctx context.Context, sessionID string) error) {
+	a.mux.HandleFunc("POST /relay/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
 
-			eg.Go(func() error {
-				return a.handleStream(str)
-			})
+		if err := f(r.Context(), sessionID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-	})
 
-	return eg.Wait()
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
-// handleStream handles a single QUIC stream by reading HTTP request and writing response.
-func (a *Agent) handleStream(stream *quic.Stream) error {
+// Serve handles a single QUIC stream by reading HTTP request and writing response.
+func (a *Agent) Serve(stream Stream) error {
 	reader := bufio.NewReader(stream)
-	req, err := http.ReadRequest(reader)
-	if err != nil {
-		return fmt.Errorf("read request: %w", err)
+
+	for {
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			return fmt.Errorf("read request: %w", err)
+		}
+
+		req = req.WithContext(stream.Context())
+
+		var rw responseWriter
+		a.mux.ServeHTTP(&rw, req)
+		req.Body.Close()
+		if err := rw.write(stream); err != nil {
+			return fmt.Errorf("write response: %w", err)
+		}
 	}
-
-	req = req.WithContext(stream.Context())
-
-	var rw responseWriter
-	a.mux.ServeHTTP(&rw, req)
-	req.Body.Close()
-	if err := rw.write(stream); err != nil {
-		return fmt.Errorf("write response: %w", err)
-	}
-
-	return stream.Close() // close send direction, so that client knows response is complete
 }
 
 type responseWriter struct {
