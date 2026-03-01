@@ -67,6 +67,8 @@ func NewUDPRelay(opts ...Option) *UDPRelay {
 	return &r
 }
 
+// Serve starts the UDP relay on the given connection.
+// It will block until the connection is closed or an error occurs.
 func (r *UDPRelay) Serve(conn *net.UDPConn) error {
 	inbox := make(chan packet, r.workers)
 
@@ -104,6 +106,8 @@ func (r *UDPRelay) Serve(conn *net.UDPConn) error {
 	return eg.Wait()
 }
 
+// ListenUDP listens on the given UDP address and starts the relay.
+// It will block until the connection is closed or an error occurs.
 func (r *UDPRelay) ListenUDP(addr *net.UDPAddr) error {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
@@ -123,6 +127,7 @@ func (r *UDPRelay) AddRoute(a, b netip.AddrPort) {
 	r.routes[b] = a
 }
 
+// RemoveRoute removes the bidirectional route between addresses a and b.
 func (r *UDPRelay) RemoveRoute(a, b netip.AddrPort) {
 	r.routesMu.Lock()
 	defer r.routesMu.Unlock()
