@@ -185,7 +185,62 @@ The server is configured using environment variables:
 
 ## Star CLI
 
-TODO: add options table
+When run without arguments, Star starts a local web UI server and opens it in the browser.
+Set `LISTEN_ADDR` to override the default listen address (default: `127.0.0.1` with a system-assigned port).
+
+```
+star [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
+```
+
+### Global Options
+
+| Flag          | Required | Default | Description                                                                               |
+|---------------|----------|---------|-------------------------------------------------------------------------------------------|
+| `--secret`    | Yes      | —       | Shared secret matching the registar server's `SECRET`                                     |
+| `--registar`  | Yes      | —       | Registar server URL                                                                       |
+| `--port`      | No       | `0`     | Local UDP listen port; `0` means system-assigned                                          |
+| `--ca-cert`   | No       | —       | Path to a CA certificate file for the registar server (used for testing or custom setups) |
+| `--log-level` | No       | `INFO`  | Logging level: `DEBUG`, `INFO`, `WARN`, `ERROR`                                           |
+
+### Commands
+
+#### `host` — Host a Game
+
+```
+star [GLOBAL OPTIONS] host [OPTIONS]
+```
+
+| Flag     | Required | Default | Description                                                        |
+|----------|----------|---------|--------------------------------------------------------------------|
+| `--port` | No       | `24642` | Local game port to forward traffic to (defaults to Stardew Valley) |
+| `--key`  | No       | —       | Game key to register; if not set, a new key is generated           |
+
+After starting, the game key is printed to stdout. Share it with your friend.
+
+#### `peer` — Join a Game
+
+```
+star [GLOBAL OPTIONS] peer [OPTIONS]
+```
+
+| Flag            | Required | Default | Description                                                             |
+|-----------------|----------|---------|-------------------------------------------------------------------------|
+| `--key`         | Yes      | —       | Game key received from the host                                         |
+| `--listen-port` | No       | `0`     | Local UDP port to listen on for game traffic; `0` means system-assigned |
+
+After connecting, the local address to point your game client at is printed to stdout.
+
+### Examples
+
+Host a game on a custom port to forward traffic to:
+```sh
+star --secret mysecret --registar https://registar.example.com host --port 12345
+```
+
+Join a game:
+```sh
+star --secret mysecret --registar https://registar.example.com peer --key XXXX-XXXX
+```
 
 
 ## How It Works
@@ -204,6 +259,9 @@ The Star client is a UDP server that forwards UDP traffic over QUIC datagrams.
 ## Development
 
 TODO: add
+
+See [p2ptest/README.md](./internal/registar/p2p/p2ptest/README.md) about running integrations
+tests for NAT hole-punching.
 
 ### HTTP/3
 
