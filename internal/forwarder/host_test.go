@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dmksnnk/star/internal/forwarder"
+	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/auth"
 	"github.com/dmksnnk/star/internal/registar/registartest"
 	"golang.org/x/sync/errgroup"
@@ -44,6 +45,13 @@ func TestRunHost(t *testing.T) {
 		TLSConfig:  srv.TLSConfig(),
 		ListenAddr: &net.UDPAddr{IP: localhost, Port: 0},
 	}
+
+	t.Run("host not found", func(t *testing.T) {
+		_, err := peerCfg.Join(context.TODO(), srv.URL(), token)
+		if !errors.Is(err, registar.ErrHostNotFound) {
+			t.Errorf("Join: expected ErrHostNotFound, got: %v", err)
+		}
+	})
 
 	t.Run("stops on Close", func(t *testing.T) {
 		serverConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localhost, Port: 0})

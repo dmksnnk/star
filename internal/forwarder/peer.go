@@ -60,11 +60,18 @@ func (p PeerConfig) Join(
 		return nil, fmt.Errorf("create joiner: %w", err)
 	}
 
+	hostConn, err := joiner.Join(ctx)
+	if err != nil {
+		joiner.Close()
+		return nil, fmt.Errorf("join host: %w", err)
+	}
+
 	lc := udp.ListenConfig{
 		Logger: logger.With(slog.String("component", "udp.ListenConfig")),
 	}
 	gameListener, err := lc.Listen(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p.GameListenPort})
 	if err != nil {
+		joiner.Close()
 		return nil, fmt.Errorf("listen UDP: %w", err)
 	}
 
@@ -75,6 +82,7 @@ func (p PeerConfig) Join(
 
 	return &Peer{
 		joiner:       joiner,
+		hostConn:     hostConn,
 		gameListener: gameListener,
 		linkConfig:   linkConfig{UDPIdleTimeout: udpIdleTimeout},
 		logger:       logger,
@@ -83,6 +91,7 @@ func (p PeerConfig) Join(
 
 type Peer struct {
 	joiner       *registar.Joiner
+	hostConn     registar.DatagramConn
 	gameListener *udp.Listener
 	linkConfig   linkConfig
 
@@ -114,16 +123,14 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 
 		p.logger.Debug("accepted game connection", "addr", gameConn.RemoteAddr())
 
-		hostConn, err := p.joiner.Join(ctx)
-		if err != nil {
-			gameConn.Close()
-			return fmt.Errorf("join host: %w", err)
-		}
-
-		if err := p.linkConfig.link(ctx, gameConn, hostConn); err != nil {
+		if err := p.linkConfig.link(ctx, gameConn, p.hostConn); err != nil {
 			if errors.Is(err, errLinkIdleTimeout) {
 				p.logger.Debug("link idle timeout, closing game connection")
 				gameConn.Close()
+				p.hostConn, err = p.joiner.Join(ctx)
+				if err != nil {
+					return fmt.Errorf("join host: %w", err)
+				}
 				continue
 			}
 
@@ -134,7 +141,7 @@ func (p *Peer) AcceptAndLink(ctx context.Context) error {
 				return nil
 			}
 
-			hostConn.Close()
+			p.hostConn.Close()
 			return fmt.Errorf("link with game: %w", err)
 		}
 	}
