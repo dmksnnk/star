@@ -93,7 +93,8 @@ func runHost(ctx context.Context, cfg commandConfig, hostCfg hostConfig, logger 
 	}
 	defer host.Close()
 
-	logger.Info("game registered", "key", gameKey.String())
+	logger.Debug("game registered", "key", gameKey.String())
+	fmt.Printf("\n⭐ Invite Code: %s\n\n", gameKey.String())
 
 	gameAddr := &net.UDPAddr{Port: hostCfg.GamePort}
 	if err := host.AcceptAndLink(ctx, gameAddr); err != nil {
