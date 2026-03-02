@@ -39,9 +39,10 @@ See [Registar Server Configuration](#registar-server-configuration) for all conf
 #### Deploying Behind a Reverse Proxy
 
 Registar runs three services:
--  HTTP Server (TCP): Handles ACME challenges and redirects HTTP→HTTPS
--  HTTPS Server (TCP): Serves HTTP/1.1 & HTTP/2 and advertises HTTP/3 support via `Alt-Svc`.
--  HTTP/3 Server (UDP): Handles the actual QUIC game traffic.
+
+- HTTP Server (TCP): Handles ACME challenges and redirects HTTP→HTTPS
+- HTTPS Server (TCP): Serves HTTP/1.1 & HTTP/2 and advertises HTTP/3 support via `Alt-Svc`.
+- HTTP/3 Server (UDP): Handles the actual QUIC game traffic.
 
 Since Registar uses HTTP/3 (QUIC), it manages its own TLS certificates (via Let's Encrypt).
 The parts that can be proxied are the HTTP and HTTPS servers,
@@ -58,6 +59,7 @@ The proxy should not terminate TLS for this service, as Registar manages its own
 Here is an example of how to do it with Traefik:
 
 **docker-compose.yaml** (registar service):
+
 ```yaml
 services:
   registar:
@@ -87,6 +89,7 @@ secrets:
 ```
 
 **Traefik routes.yaml** (registar entries):
+
 ```yaml
 http:
   routers:
@@ -116,6 +119,7 @@ tcp:
 ```
 
 **traefik.yaml** (important — use `httpChallenge`, not `tlsChallenge`):
+
 ```yaml
 certificatesResolvers:
   letsencrypt:
@@ -126,45 +130,34 @@ certificatesResolvers:
 
 ### Game Host
 
+Prebuilt client can be found at [Releases page](https://github.com/dmksnnk/star/releases)
+
 If you are hosting the game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-
-![Client home screen](./_screenshots/home.png)
-
+  ![Client home screen](./_screenshots/home.png)
 2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
 3. Click "Host a Game".
 4. Select a game from the list or enter a custom port to forward to.
-
-![Host screen](./_screenshots/host.png)
-
-6. Click "Start Hosting".
-7. Share the invite code with your friend.
-
-![Invite code screen](./_screenshots/invite.png)
+  ![Host screen](./_screenshots/host.png)
+5. Click "Start Hosting".
+6. Share the invite code with your friend.
+  ![Invite code screen](./_screenshots/invite.png)
 
 ### Game Peer
 
 If you want only join a game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-
-![Client home screen](./_screenshots/home.png)
-
+  ![Client home screen](./_screenshots/home.png)
 2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
 3. Click "Join a Game".
 4. Enter the invite code you received from the host and click "Connect".
-
-![Join screen](./_screenshots/join.png)
-
+  ![Join screen](./_screenshots/join.png)
 5. You will see the address where you can connect
-
-![Peer connected screen](./_screenshots/connected.png)
-
+  ![Peer connected screen](./_screenshots/connected.png)
 6. Connect the game client to that address, here is an example from Stardew Valley:
-
-![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
-
+  ![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
 
 ## Registar Server Configuration
 
@@ -233,15 +226,16 @@ After connecting, the local address to point your game client at is printed to s
 ### Examples
 
 Host a game on a custom port to forward traffic to:
+
 ```sh
 star --secret mysecret --registar https://registar.example.com host --port 12345
 ```
 
 Join a game:
+
 ```sh
 star --secret mysecret --registar https://registar.example.com peer --key XXXX-XXXX
 ```
-
 
 ## How It Works
 
