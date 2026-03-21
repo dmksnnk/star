@@ -2,11 +2,17 @@ package httpplatform
 
 import (
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
+	"strconv"
 	"time"
 
+	"golang.org/x/time/rate"
+
+	"github.com/dmksnnk/star/internal/platform"
 	"github.com/dmksnnk/star/internal/registar/auth"
 )
 
@@ -35,9 +41,12 @@ func LogRequests(logger *slog.Logger) Middleware {
 					slog.String("path", r.URL.Path),
 					slog.String("query", r.URL.RawQuery),
 					slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-					slog.Group("headers", headers(r.Header)...),
+					slog.GroupAttrs("headers", headers(r.Header)...),
 				),
-				slog.Group("response", slog.Int("status", rw.Status())),
+				slog.Group("response",
+					slog.Int("status", rw.Status()),
+					slog.GroupAttrs("headers", headers(rw.Header())...),
+				),
 			)
 
 			logger.LogAttrs(r.Context(), slog.LevelDebug, "request", attrs...)
@@ -113,6 +122,37 @@ func Authenticate(secret []byte, tokener func(*http.Request) string) Middleware 
 	}
 }
 
+func RateLimit(every time.Duration, burst int, requestIP func(*http.Request) netip.Addr) Middleware {
+	ttl := every
+	if burst > 1 {
+		ttl = time.Duration(burst) * every
+	}
+	ipLimiterMap := platform.NewTTLMap[netip.Addr, *rate.Limiter](ttl)
+	limit := rate.Every(every)
+
+	return func(handler http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := requestIP(r)
+			limiter := ipLimiterMap.GetOrSet(ip, func() *rate.Limiter {
+				return rate.NewLimiter(limit, burst)
+			})
+
+			reservation := limiter.Reserve()
+			if delay := reservation.Delay(); delay > 0 {
+				reservation.Cancel()
+				if delay < rate.InfDuration { // in case burst set to 0, Delay returns InfDuration
+					ra := int(math.Ceil(delay.Seconds()))
+					w.Header().Set("Retry-After", strconv.Itoa(ra))
+				}
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+
+			handler.ServeHTTP(w, r)
+		})
+	}
+}
+
 func TokenFromPathValue(name string) func(*http.Request) string {
 	return func(r *http.Request) string {
 		return r.PathValue(name)
@@ -125,8 +165,8 @@ func TokenFromHeader(name string) func(*http.Request) string {
 	}
 }
 
-func headers(hs http.Header) []any {
-	attrs := make([]any, 0, len(hs))
+func headers(hs http.Header) []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(hs))
 	for k, vs := range hs {
 		attrs = append(attrs, slog.String(k, vs[0]))
 	}
@@ -136,8 +176,7 @@ func headers(hs http.Header) []any {
 
 // Wrap handler with middlewares.
 func Wrap(handler http.Handler, mws ...Middleware) http.Handler {
-	for i := len(mws) - 1; i >= 0; i-- {
-		mw := mws[i]
+	for _, mw := range slices.Backward(mws) {
 		if mw != nil {
 			handler = mw(handler)
 		}

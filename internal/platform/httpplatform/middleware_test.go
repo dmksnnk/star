@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar/auth"
@@ -90,4 +92,78 @@ func TestAllowHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRateLimit(t *testing.T) {
+	t.Run("rate limits", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			limiter := httpplatform.RateLimit(time.Minute, 1, httpplatform.RequestIP)
+			req := httptest.NewRequest(http.MethodGet, "http://example.com", http.NoBody)
+			handler := limiter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			// first request should pass
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want status OK, got %d", rec.Code)
+			}
+
+			// second request should be rate limited
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("want status TooManyRequests, got %d", rec.Code)
+			}
+
+			if ra := rec.Header().Get("Retry-After"); ra != "60" {
+				t.Fatalf("want Retry-After 60 seconds, got %s", ra)
+			}
+
+			time.Sleep(time.Minute)
+
+			// after waiting, request should pass again
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("want status OK, got %d", rec.Code)
+			}
+		})
+	})
+
+	t.Run("separate limiters per IP", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			limiter := httpplatform.RateLimit(time.Minute, 1, httpplatform.RequestIP)
+			handler := limiter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			reqA := httptest.NewRequest(http.MethodGet, "http://example.com", http.NoBody)
+			reqA.RemoteAddr = "192.0.2.1:1234"
+
+			reqB := httptest.NewRequest(http.MethodGet, "http://example.com", http.NoBody)
+			reqB.RemoteAddr = "192.0.2.2:1234"
+
+			// exhaust IP A's limit
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, reqA)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want status OK, got %d", rec.Code)
+			}
+
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, reqA)
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("want status TooManyRequests, got %d", rec.Code)
+			}
+
+			// IP B should be unaffected
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, reqB)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want status OK for different IP, got %d", rec.Code)
+			}
+		})
+	})
 }
