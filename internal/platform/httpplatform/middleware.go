@@ -100,7 +100,7 @@ func AllowHosts(hosts []string) Middleware {
 }
 
 // Authenticate validates the token in the request and adds it to context.
-// Responds with 401 if the token is invalid.
+// Responds with 401 if the token is invalid or missing.
 func Authenticate(secret []byte, tokener func(*http.Request) string) Middleware {
 	return func(handler http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -11,47 +11,102 @@ import (
 	"github.com/dmksnnk/star/internal/registar/auth"
 )
 
-func TestValidate(t *testing.T) {
-	secret := []byte("secret")
-	key := auth.NewKey()
-	token := auth.NewToken(key, secret)
+func TestAuthenticate(t *testing.T) {
+	t.Run("with secret", func(t *testing.T) {
+		secret := []byte("secret")
+		key := auth.NewKey()
+		token := auth.NewToken(key, secret)
 
-	handler := httpplatform.Authenticate(secret, httpplatform.TokenFromPathValue("token"))(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotKey, ok := auth.KeyFromContext(r.Context())
-			if !ok {
-				t.Fatal("key not found in context")
+		handler := httpplatform.Authenticate(secret, httpplatform.TokenFromPathValue("token"))(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotKey, ok := auth.KeyFromContext(r.Context())
+				if !ok {
+					t.Fatal("key not found in context")
+				}
+
+				if gotKey != key {
+					t.Errorf("want key %s, got %s", key, gotKey)
+				}
+			}),
+		)
+
+		mux := http.NewServeMux()
+		mux.Handle("/{token}", handler)
+
+		t.Run("valid token", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/"+token.String(), http.NoBody)
+
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("want status OK, got %d", rec.Code)
 			}
+		})
 
-			if want, got := key, gotKey; want != got {
-				t.Errorf("want key %s, got %s", want, got)
+		t.Run("invalid token", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/invalid", http.NoBody)
+
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("want status Unauthorized, got %d", rec.Code)
 			}
-		}),
-	)
-
-	mux := http.NewServeMux()
-	mux.Handle("/{token}", handler)
-
-	t.Run("valid token", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/"+token.String(), http.NoBody)
-
-		mux.ServeHTTP(rec, req)
-
-		if want, got := http.StatusOK, rec.Code; want != got {
-			t.Errorf("want status OK, got %d", rec.Code)
-		}
+		})
 	})
 
-	t.Run("invalid token", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/invalid", http.NoBody)
+	t.Run("without secret", func(t *testing.T) {
+		key := auth.NewKey()
+		token := auth.NewToken(key, nil)
 
-		mux.ServeHTTP(rec, req)
+		handler := httpplatform.Authenticate(nil, httpplatform.TokenFromHeader("x-token"))(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotKey, ok := auth.KeyFromContext(r.Context())
+				if !ok {
+					t.Fatal("key not found in context")
+				}
 
-		if want, got := http.StatusUnauthorized, rec.Code; want != got {
-			t.Errorf("want status OK, got %d", rec.Code)
-		}
+				if gotKey != key {
+					t.Errorf("want key %s, got %s", key, gotKey)
+				}
+			}),
+		)
+
+		t.Run("valid token", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			req.Header.Set("x-token", token.String())
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("want status OK, got %d", rec.Code)
+			}
+		})
+
+		t.Run("invalid token", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+			req.Header.Set("x-token", "invalid")
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("want status Unauthorized, got %d", rec.Code)
+			}
+		})
+
+		t.Run("missing token", func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("want status Unauthorized, got %d", rec.Code)
+			}
+		})
 	})
 }
 
