@@ -163,18 +163,20 @@ If you want only join a game, follow these steps:
 
 The server is configured using environment variables:
 
-| Variable                     | Required                | Default     | Description                                                                 |
-|------------------------------|-------------------------|-------------|-----------------------------------------------------------------------------|
-| `SECRET`                     | Yes (or `SECRET_FILE`)  | —           | Shared secret to prevent unauthorized connections                           |
-| `SECRET_FILE`                | Yes (or `SECRET`)       | —           | Path to a file containing the secret                                        |
-| `LOG_LEVEL`                  | No                      | `INFO`      | Logging level: `INFO`, `DEBUG`                                              |
-| `HTTP_LISTEN`                | No                      | `:80`       | HTTP listen address (redirects to HTTPS)                                    |
-| `HTTPS_LISTEN`               | No                      | `:443`      | HTTPS and HTTP/3 listen address                                             |
-| `HTTPS_ADVERTISE_HTTP3_PORT` | No                      | `443`       | Port advertised via `Alt-Svc` for HTTP/3 upgrade                            |
-| `HTTPS_REDIRECT_PORT`        | No                      | `443`       | Port used in HTTP→HTTPS redirects                                           |
-| `CERT_SELF_SIGNED`           | No                      | `false`     | Use a self-signed certificate instead of Let's Encrypt (useful for testing) |
-| `CERT_DIR`                   | No                      | `certs`     | Directory where certificates are stored                                     |
-| `CERT_DOMAINS`               | Yes (for Let's Encrypt) | `localhost` | Comma-separated list of domains for the certificate                         |
+| Variable                     | Required                | Default     | Description                                                                                     |
+|------------------------------|-------------------------|-------------|-------------------------------------------------------------------------------------------------|
+| `SECRET`                     | Yes (or `SECRET_FILE`)  | —           | Shared secret to prevent unauthorized connections                                               |
+| `SECRET_FILE`                | Yes (or `SECRET`)       | —           | Path to a file containing the secret                                                            |
+| `LOG_LEVEL`                  | No                      | `INFO`      | Logging level: `INFO`, `DEBUG`                                                                  |
+| `HTTP_LISTEN`                | No                      | `:80`       | HTTP listen address (redirects to HTTPS)                                                        |
+| `HTTPS_LISTEN`               | No                      | `:443`      | HTTPS and HTTP/3 listen address                                                                 |
+| `HTTPS_ADVERTISE_HTTP3_PORT` | No                      | `443`       | Port advertised via `Alt-Svc` for HTTP/3 upgrade                                                |
+| `HTTPS_REDIRECT_PORT`        | No                      | `443`       | Port used in HTTP→HTTPS redirects                                                               |
+| `CERT_SELF_SIGNED`           | No                      | `false`     | Use a self-signed certificate instead of Let's Encrypt (useful for testing)                     |
+| `CERT_DIR`                   | No                      | `certs`     | Directory where certificates are stored                                                         |
+| `CERT_DOMAINS`               | Yes (for Let's Encrypt) | `localhost` | Comma-separated list of domains for the certificate                                             |
+| `RATE_LIMIT_EVERY`           | No                      | `100ms`     | Minimum time between requests for the same IP (e.g., `100ms` will allow 10 requests per second) |
+| `RATE_LIMIT_BURST`           | No                      | `1`         | Maximum number of requests allowed in a burst                                                   |
 
 ## Star CLI
 

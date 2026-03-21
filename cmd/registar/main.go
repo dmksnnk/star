@@ -32,6 +32,7 @@ type config struct {
 	SecretFromFile string     `env:"SECRET_FILE,file"` // if set, takes precedence over Secret
 	Secret         string     `env:"SECRET"`
 	LogLevel       slog.Level `env:"LOG_LEVEL" envDefault:"INFO"`
+	RateLimit      rateLimitConfig
 	HTTP           httpConfig
 	HTTPS          httpsConfig
 	Cert           certConfig
@@ -62,6 +63,11 @@ type certConfig struct {
 	Domains []string `env:"CERT_DOMAINS" envDefault:"localhost"`
 }
 
+type rateLimitConfig struct {
+	Every time.Duration `env:"RATE_LIMIT_EVERY" envDefault:"100ms"`
+	Burst int           `env:"RATE_LIMIT_BURST" envDefault:"1"`
+}
+
 func main() {
 	ctx, close := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer close()
@@ -85,6 +91,7 @@ func main() {
 	addHealthCheck(router)
 	handler := httpplatform.Wrap(
 		router,
+		httpplatform.RateLimit(cfg.RateLimit.Every, cfg.RateLimit.Burst, httpplatform.RequestIP),
 		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
 		httpplatform.AllowHosts(cfg.Cert.Domains),
 	)
@@ -100,6 +107,7 @@ func main() {
 		Addr: cfg.HTTPS.Listen,
 		Handler: httpplatform.Wrap(
 			advertiseHTTP3Mux,
+			httpplatform.RateLimit(cfg.RateLimit.Every, cfg.RateLimit.Burst, httpplatform.RequestIP),
 			http3platform.AdvertiseHTTP3(cfg.HTTPS.AdvertiseHTTP3Port),
 			httpplatform.LogRequests(logger.With(slog.String("component", "advertise_http3"))),
 			httpplatform.AllowHosts(cfg.Cert.Domains),
