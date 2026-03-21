@@ -176,7 +176,7 @@ The server is configured using environment variables:
 | `CERT_DIR`                   | No                      | `certs`     | Directory where certificates are stored                                                         |
 | `CERT_DOMAINS`               | Yes (for Let's Encrypt) | `localhost` | Comma-separated list of domains for the certificate                                             |
 | `RATE_LIMIT_EVERY`           | No                      | `100ms`     | Minimum time between requests for the same IP (e.g., `100ms` will allow 10 requests per second) |
-| `RATE_LIMIT_BURST`           | No                      | `1`         | Maximum number of requests allowed in a burst                                                   |
+| `RATE_LIMIT_BURST`           | No                      | `10`        | Maximum number of requests allowed in a burst                                                   |
 
 ## Star CLI
 

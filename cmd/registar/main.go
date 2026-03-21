@@ -65,7 +65,7 @@ type certConfig struct {
 
 type rateLimitConfig struct {
 	Every time.Duration `env:"RATE_LIMIT_EVERY" envDefault:"100ms"`
-	Burst int           `env:"RATE_LIMIT_BURST" envDefault:"1"`
+	Burst int           `env:"RATE_LIMIT_BURST" envDefault:"10"`
 }
 
 func main() {
