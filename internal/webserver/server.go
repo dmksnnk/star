@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"sync"
@@ -41,6 +42,9 @@ type Server struct {
 	session *activeSession
 	wg      sync.WaitGroup
 
+	cacheMu   sync.RWMutex
+	formCache map[string]url.Values
+
 	sharedConfig sharedConfig
 }
 
@@ -56,6 +60,7 @@ func New() (*Server, error) {
 	s := &Server{
 		templates:  templates,
 		logHandler: sseHandler,
+		formCache:  make(map[string]url.Values),
 	}
 	return s, nil
 }
@@ -78,6 +83,20 @@ func (s *Server) Stop() {
 	s.wg.Wait()
 }
 
+func (s *Server) cacheForm(key string, form url.Values) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	s.formCache[key] = form
+}
+
+func (s *Server) cachedForm(key string) url.Values {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+
+	return s.formCache[key]
+}
+
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	tmpl, ok := s.templates[name]
 	if !ok {
@@ -95,7 +114,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, "index.html", indexData{})
+	s.render(w, "index.html", indexData{Values: s.cachedForm("index")})
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +127,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "index.html", indexData{Errors: errs, Values: r.Form})
 		return
 	}
+	s.cacheForm("index", r.Form)
 
 	s.mu.Lock()
 	s.sharedConfig = cfg
@@ -129,7 +149,8 @@ func (s *Server) handleHostForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "host.html", hostFormData{
-		Games: DefaultGames,
+		Games:  DefaultGames,
+		Values: s.cachedForm("host"),
 	})
 }
 
@@ -151,6 +172,7 @@ func (s *Server) handleHostStart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.cacheForm("host", r.Form)
 
 	token := auth.NewToken(cfg.GameKey, []byte(s.sharedConfig.Secret))
 	logger := slog.New(s.logHandler)
@@ -248,7 +270,7 @@ func (s *Server) handlePeerForm(w http.ResponseWriter, r *http.Request) {
 	if s.redirectIfSession(w, r) {
 		return
 	}
-	s.render(w, "peer.html", peerFormData{})
+	s.render(w, "peer.html", peerFormData{Values: s.cachedForm("peer")})
 }
 
 func (s *Server) handlePeerStart(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +290,7 @@ func (s *Server) handlePeerStart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.cacheForm("peer", r.Form)
 
 	logger := slog.New(s.logHandler)
 	fwdCfg := forwarder.PeerConfig{
