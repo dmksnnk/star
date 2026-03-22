@@ -12,6 +12,11 @@ build-registar:
 build-docker:
 	@docker build --platform linux/amd64 -f Dockerfile --tag=$(registar_image) .
 
+.PHONY: push-docker
+push-docker: build-docker
+	@docker push $(registar_image)
+
+
 .PHONY: golangci
 golangci:
 	@docker run --rm \
