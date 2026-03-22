@@ -256,11 +256,14 @@ func (a *Admin) basicAuth(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-func AddRoutes(mux *http.ServeMux, a *Admin) {
-	mux.Handle("GET /-/admin", a.basicAuth(a.handleIndex))
-	mux.Handle("GET /-/admin/events", a.basicAuth(a.handleEvents))
-	mux.Handle("GET /-/admin/stats", a.basicAuth(a.handleStats))
-	mux.Handle("GET /-/admin/bandwidth", a.basicAuth(a.handleBandwidth))
+func AdminRoutes(a *Admin) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.Handle("GET /", a.basicAuth(a.handleIndex))
+	mux.Handle("GET /events", a.basicAuth(a.handleEvents))
+	mux.Handle("GET /stats", a.basicAuth(a.handleStats))
+	mux.Handle("GET /bandwidth", a.basicAuth(a.handleBandwidth))
+	return mux
 }
 
 func parseTemplates() *template.Template {

@@ -24,6 +24,7 @@ import (
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
 	"github.com/dmksnnk/star/internal/registar/admin"
+	"github.com/dmksnnk/star/web"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
@@ -100,8 +101,7 @@ func main() {
 
 	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
 	addHealthCheck(router)
-	admin.AddLanding(router, cfg.RateLimit.Every, cfg.RateLimit.Burst)
-	admin.AddRoutes(router, adminPage)
+	addAdmin(router, adminPage, cfg.RateLimit)
 	handler := httpplatform.Wrap(
 		router,
 		httpplatform.RateLimit(cfg.RateLimit.Every, cfg.RateLimit.Burst, httpplatform.RequestIP),
@@ -117,8 +117,7 @@ func main() {
 
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
-	admin.AddLanding(advertiseHTTP3Mux, cfg.RateLimit.Every, cfg.RateLimit.Burst)
-	admin.AddRoutes(advertiseHTTP3Mux, adminPage)
+	addAdmin(advertiseHTTP3Mux, adminPage, cfg.RateLimit)
 
 	advertiseHTTP3Srv := http.Server{
 		Addr: cfg.HTTPS.Listen,
@@ -327,6 +326,12 @@ func addHealthCheck(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+func addAdmin(mux *http.ServeMux, adminPage *admin.Admin, cfg rateLimitConfig) {
+	mux.Handle("GET /static/", http.StripPrefix("/static", httpplatform.Gzip(httpplatform.CacheStaticFiles(web.StaticHandler()))))
+	mux.Handle("/-/admin/", http.StripPrefix("/-/admin", httpplatform.Gzip(admin.AdminRoutes(adminPage))))
+	mux.Handle("/", httpplatform.Gzip(admin.Landing(cfg.Every, cfg.Burst)))
 }
 
 func abort(msg string, err error) {
