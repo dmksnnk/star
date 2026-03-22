@@ -23,6 +23,7 @@ import (
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
+	"github.com/dmksnnk/star/internal/registar/admin"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
@@ -87,14 +88,17 @@ func main() {
 	tlsConf, acmeMgr := newTLSConfig(cfg.Cert)
 
 	srvHTTP3 := registar.NewServer(caAuthority)
+
 	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
 	addHealthCheck(router)
+	admin.AddLanding(router, cfg.RateLimit.Every, cfg.RateLimit.Burst)
 	handler := httpplatform.Wrap(
 		router,
 		httpplatform.RateLimit(cfg.RateLimit.Every, cfg.RateLimit.Burst, httpplatform.RequestIP),
 		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
 		httpplatform.AllowHosts(cfg.Cert.Domains),
 	)
+
 	srvHTTP3.H3.Handler = handler
 	srvHTTP3.H3.Addr = cfg.HTTPS.Listen
 	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
@@ -103,6 +107,8 @@ func main() {
 
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
+	admin.AddLanding(advertiseHTTP3Mux, cfg.RateLimit.Every, cfg.RateLimit.Burst)
+
 	advertiseHTTP3Srv := http.Server{
 		Addr: cfg.HTTPS.Listen,
 		Handler: httpplatform.Wrap(

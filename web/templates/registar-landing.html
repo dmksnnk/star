@@ -1,0 +1,101 @@
+{{define "content"}}
+<div class="landing">
+    <section>
+        <h1>Star Relay</h1>
+        <p>A public relay server for <a href="https://github.com/dmksnnk/star"><i class="nes-icon star is-small"></i> Star</a>.
+            Copy the URL below into the Star client to play games over the internet with friends.</p>
+
+        <div class="nes-field">
+            <label for="server-url">Server URL</label>
+            <div class="copy-row">
+                <input id="server-url" class="nes-input" readonly value="{{.ServerURL}}">
+                <button type="button" class="nes-btn is-primary" onclick="copyToClipboard('server-url', this)">Copy</button>
+            </div>
+        </div>
+
+    </section>
+
+    <section>
+        <h2>Getting Started</h2>
+
+        <h3>Host a Game</h3>
+        <ol class="nes-list is-disc">
+            <li><a href="https://github.com/dmksnnk/star/releases/latest">Download Star</a> and run it</li>
+            <li>Enter the server URL above, click <b>Host a Game</b></li>
+            <li>Select your game and click <b>Start Hosting</b></li>
+            <li>Share the invite code (XXXX-XXXX) with your friend</li>
+        </ol>
+        <figure class="screenshot">
+            <img src="https://raw.githubusercontent.com/dmksnnk/star/main/_screenshots/invite.png" alt="Invite code screen">
+            <figcaption>Invite code screen</figcaption>
+        </figure>
+
+        <h3>Join a Game</h3>
+        <ol class="nes-list is-disc">
+            <li><a href="https://github.com/dmksnnk/star/releases/latest">Download Star</a> and run it</li>
+            <li>Enter the server URL above, click <b>Join a Game</b></li>
+            <li>Enter the invite code and click <b>Connect</b></li>
+            <li>Use the displayed address in your game client</li>
+        </ol>
+        <figure class="screenshot">
+            <img src="https://raw.githubusercontent.com/dmksnnk/star/main/_screenshots/connected.png" alt="Connected screen">
+            <figcaption>Connected screen</figcaption>
+        </figure>
+    </section>
+
+    <br>
+    <section>
+        <h2>How It Works</h2>
+        <p>Star first attempts a direct P2P connection between host and peer (UDP hole punching).
+            If that fails, game traffic is relayed through this server.
+            All P2P traffic is encrypted with mutual TLS using per-session certificates.
+            All communication uses HTTP/3 (QUIC).</p>
+    </section>
+
+    <footer>
+        <p>Status: <i id="status-icon" class="nes-icon heart is-small is-transparent"></i> <span id="status-indicator">checking...</span> ·
+            Rate limited to {{printf "%.2f" .RateLimitPerSecond}} req/s with burst of {{.RateLimitBurst}} per IP.
+            See the source on <a href="https://github.com/dmksnnk/star"><i class="nes-icon github is-small"></i></a>.</p>
+    </footer>
+</div>
+
+<script>
+    function copyToClipboard(inputId, btn) {
+        const input = document.getElementById(inputId);
+        navigator.clipboard.writeText(input.value).then(() => {
+            clearTimeout(btn._copyTimeout);
+            btn.textContent = 'Copied!';
+            btn.classList.remove('is-primary');
+            btn.classList.add('is-success');
+            btn._copyTimeout = setTimeout(() => {
+                btn.textContent = 'Copy';
+                btn.classList.remove('is-success');
+                btn.classList.add('is-primary');
+            }, 1500);
+        });
+    }
+
+    function checkHealth() {
+        const icon = document.getElementById('status-icon');
+        const text = document.getElementById('status-indicator');
+        fetch('/-/health').then(r => {
+            if (r.ok) {
+                icon.classList.remove('is-transparent');
+                text.textContent = 'online';
+                text.style.color = '#92cc41';
+            } else {
+                icon.classList.add('is-transparent');
+                text.textContent = 'offline';
+                text.style.color = '#e76e55';
+            }
+        }).catch(() => {
+            icon.classList.add('is-transparent');
+            text.textContent = 'offline';
+            text.style.color = '#e76e55';
+        });
+    }
+
+    checkHealth();
+    setInterval(checkHealth, 5000);
+</script>
+{{end}}

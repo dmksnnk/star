@@ -33,6 +33,15 @@ main {
     align-self: stretch;
 }
 
+main a:not(.nes-btn) {
+    color: #212529;
+    text-decoration: underline;
+}
+
+.landing {
+    font-size: 0.8rem;
+}
+
 /* Form fields */
 .nes-field {
     margin-bottom: 24px;
@@ -43,8 +52,8 @@ main {
     margin-bottom: 8px;
 }
 
-#registar-url {
-    font-size: 0.75rem;
+input.nes-input {
+    font-size: 0.8rem;
 }
 
 /* Buttons */
@@ -169,6 +178,27 @@ main {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+figure.screenshot {
+    margin: 24px 0 0;
+    border: 4px solid #212529;
+    padding: 8px;
+    display: inline-block;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+figure.screenshot img {
+    display: block;
+    max-width: 100%;
+}
+
+figure.screenshot figcaption {
+    font-size: 0.55rem;
+    color: #666;
+    margin-top: 6px;
+    text-align: center;
 }
 
 /* Responsive */
