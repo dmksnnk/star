@@ -34,7 +34,7 @@ type commandConfig struct {
 
 func (c *commandConfig) Parse(args []string) error {
 	c.FS = flag.NewFlagSet("star", flag.ExitOnError)
-	c.FS.StringVar(&c.Secret, "secret", "", "secret key (required)")
+	c.FS.StringVar(&c.Secret, "secret", "", "shared secret matching the registar server's SECRET, omit if the server has no secret")
 	c.FS.TextVar(&c.Registar, "registar", textURL{}, "registar URL")
 	c.FS.IntVar(&c.Port, "port", 0, "port to listen on, if not set, listen on system assigned port")
 	c.FS.StringVar(&c.CaCert, "ca-cert", "", "path to CA certificate for registar")
@@ -58,10 +58,6 @@ func (c *commandConfig) Parse(args []string) error {
 	}
 
 	c.Command = c.FS.Args()[0]
-
-	if c.Secret == "" {
-		return errors.New("missing secret")
-	}
 
 	if c.Registar.URL == nil {
 		return errors.New("missing registar URL")

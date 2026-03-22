@@ -23,6 +23,7 @@ import (
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
 	"github.com/dmksnnk/star/internal/registar"
+	"github.com/dmksnnk/star/internal/registar/admin"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
@@ -36,6 +37,7 @@ type config struct {
 	HTTP           httpConfig
 	HTTPS          httpsConfig
 	Cert           certConfig
+	Admin          adminConfig
 }
 
 type httpConfig struct {
@@ -65,7 +67,13 @@ type certConfig struct {
 
 type rateLimitConfig struct {
 	Every time.Duration `env:"RATE_LIMIT_EVERY" envDefault:"100ms"`
-	Burst int           `env:"RATE_LIMIT_BURST" envDefault:"1"`
+	Burst int           `env:"RATE_LIMIT_BURST" envDefault:"10"`
+}
+
+type adminConfig struct {
+	Secret         string        `env:"ADMIN_SECRET"`
+	SecretFromFile string        `env:"ADMIN_SECRET_FILE,file"` // if set, takes precedence over Secret
+	ScrapeInterval time.Duration `env:"ADMIN_SCRAPE_INTERVAL" envDefault:"5s"`
 }
 
 func main() {
@@ -87,14 +95,20 @@ func main() {
 	tlsConf, acmeMgr := newTLSConfig(cfg.Cert)
 
 	srvHTTP3 := registar.NewServer(caAuthority)
+
+	adminPage := admin.NewAdmin(srvHTTP3, cfg.Admin.Secret, cfg.Admin.ScrapeInterval)
+
 	router := registar.NewRouter(srvHTTP3, []byte(cfg.Secret))
 	addHealthCheck(router)
+	admin.AddLanding(router, cfg.RateLimit.Every, cfg.RateLimit.Burst)
+	admin.AddRoutes(router, adminPage)
 	handler := httpplatform.Wrap(
 		router,
 		httpplatform.RateLimit(cfg.RateLimit.Every, cfg.RateLimit.Burst, httpplatform.RequestIP),
 		httpplatform.LogRequests(logger.With(slog.String("component", "registar"))),
 		httpplatform.AllowHosts(cfg.Cert.Domains),
 	)
+
 	srvHTTP3.H3.Handler = handler
 	srvHTTP3.H3.Addr = cfg.HTTPS.Listen
 	srvHTTP3.H3.TLSConfig = tlsConf.Clone()
@@ -103,6 +117,9 @@ func main() {
 
 	advertiseHTTP3Mux := http.NewServeMux()
 	addHealthCheck(advertiseHTTP3Mux)
+	admin.AddLanding(advertiseHTTP3Mux, cfg.RateLimit.Every, cfg.RateLimit.Burst)
+	admin.AddRoutes(advertiseHTTP3Mux, adminPage)
+
 	advertiseHTTP3Srv := http.Server{
 		Addr: cfg.HTTPS.Listen,
 		Handler: httpplatform.Wrap(
@@ -182,6 +199,8 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	adminPage.Stop()
+
 	if err := srvHTTP3.Close(); err != nil {
 		logger.Error("shutdown HTTP/3 server", "error", err)
 	}
@@ -207,11 +226,17 @@ func parseConfig() config {
 	}
 	cfg.SecretFromFile = strings.TrimSpace(cfg.SecretFromFile) // to remove trailing newlines
 	cfg.Secret = strings.TrimSpace(cfg.Secret)                 // to remove trailing newlines
-	if cfg.SecretFromFile == "" && cfg.Secret == "" {
-		abort("secret is required", errors.New("either SECRET_FILE or SECRET environment variable must be set"))
-	}
 	if cfg.SecretFromFile != "" {
 		cfg.Secret = cfg.SecretFromFile
+	}
+
+	cfg.Admin.SecretFromFile = strings.TrimSpace(cfg.Admin.SecretFromFile)
+	cfg.Admin.Secret = strings.TrimSpace(cfg.Admin.Secret)
+	if cfg.Admin.SecretFromFile == "" && cfg.Admin.Secret == "" {
+		abort("admin secret is required", errors.New("either ADMIN_SECRET_FILE or ADMIN_SECRET environment variable must be set"))
+	}
+	if cfg.Admin.SecretFromFile != "" {
+		cfg.Admin.Secret = cfg.Admin.SecretFromFile
 	}
 
 	return cfg
@@ -297,7 +322,9 @@ func writeCACert(dir string, cert *x509.Certificate) error {
 }
 
 func addHealthCheck(mux *http.ServeMux) {
-	mux.HandleFunc("/-/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /-/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	})
 }

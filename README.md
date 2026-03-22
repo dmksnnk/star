@@ -7,8 +7,7 @@ Ever wanted to play a local game with a friend who is far away? Star makes local
 The application comes with two components: Registar, a server that manages connectivity between players,
 and Star, a client that forwards UDP traffic. It has a GUI or can be used via CLI.
 
-While a publicly available server is not ready yet (but coming soon!),
-you can deploy your own Registar server and use it to connect with your friends.
+You can use the publicly available server at <https://registar.dmknnk.xyz> or deploy your own Registar server.
 
 ### Deploy a Server
 
@@ -20,7 +19,7 @@ services:
     image: ghcr.io/dmksnnk/star/registar:latest
     restart: unless-stopped
     environment:
-      - SECRET=your-secret-here        # or use SECRET_FILE with Docker secrets
+      - SECRET=your-secret-here        # optional, omit for open access
       - CERT_DOMAINS=your-domain.com
       - CERT_DIR=/certs
     ports:
@@ -72,7 +71,7 @@ services:
       - CERT_DOMAINS=registar.example.com
       - HTTPS_ADVERTISE_HTTP3_PORT=443   # advertise public UDP port for HTTP/3
       - HTTPS_REDIRECT_PORT=443          # redirect to public HTTPS port
-      - SECRET_FILE=/run/secrets/registar_secret
+      - SECRET_FILE=/run/secrets/registar_secret   # optional, omit for open access
     ports:
       - "443:8443/udp"   # HTTP/3 (QUIC) — bypasses Traefik (UDP not proxied)
     volumes:
@@ -135,29 +134,36 @@ Prebuilt client can be found at [Releases page](https://github.com/dmksnnk/star/
 If you are hosting the game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-  ![Client home screen](./_screenshots/home.png)
-2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
+
+   ![Client home screen](./_screenshots/home.png)
+2. Fill in the server's URL. If the server requires a secret, expand **Advanced** and enter it.
 3. Click "Host a Game".
 4. Select a game from the list or enter a custom port to forward to.
-  ![Host screen](./_screenshots/host.png)
+
+   ![Host screen](./_screenshots/host.png)
 5. Click "Start Hosting".
 6. Share the invite code with your friend.
-  ![Invite code screen](./_screenshots/invite.png)
+
+   ![Invite code screen](./_screenshots/invite.png)
 
 ### Game Peer
 
 If you want only join a game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-  ![Client home screen](./_screenshots/home.png)
-2. Fill server's URL and a secret (the one you set in the registar server's `SECRET` env variable).
+
+   ![Client home screen](./_screenshots/home.png)
+2. Fill in the server's URL. If the server requires a secret, expand **Advanced** and enter it.
 3. Click "Join a Game".
 4. Enter the invite code you received from the host and click "Connect".
-  ![Join screen](./_screenshots/join.png)
+
+   ![Join screen](./_screenshots/join.png)
 5. You will see the address where you can connect
-  ![Peer connected screen](./_screenshots/connected.png)
+
+   ![Peer connected screen](./_screenshots/connected.png)
 6. Connect the game client to that address, here is an example from Stardew Valley:
-  ![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
+
+   ![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
 
 ## Registar Server Configuration
 
@@ -165,8 +171,8 @@ The server is configured using environment variables:
 
 | Variable                     | Required                | Default     | Description                                                                                     |
 |------------------------------|-------------------------|-------------|-------------------------------------------------------------------------------------------------|
-| `SECRET`                     | Yes (or `SECRET_FILE`)  | —           | Shared secret to prevent unauthorized connections                                               |
-| `SECRET_FILE`                | Yes (or `SECRET`)       | —           | Path to a file containing the secret                                                            |
+| `SECRET`                     | No                      | —           | Shared secret to restrict access. If unset, the server is open to anyone                        |
+| `SECRET_FILE`                | No                      | —           | Path to a file containing the secret (takes precedence over `SECRET`)                           |
 | `LOG_LEVEL`                  | No                      | `INFO`      | Logging level: `INFO`, `DEBUG`                                                                  |
 | `HTTP_LISTEN`                | No                      | `:80`       | HTTP listen address (redirects to HTTPS)                                                        |
 | `HTTPS_LISTEN`               | No                      | `:443`      | HTTPS and HTTP/3 listen address                                                                 |
@@ -176,7 +182,7 @@ The server is configured using environment variables:
 | `CERT_DIR`                   | No                      | `certs`     | Directory where certificates are stored                                                         |
 | `CERT_DOMAINS`               | Yes (for Let's Encrypt) | `localhost` | Comma-separated list of domains for the certificate                                             |
 | `RATE_LIMIT_EVERY`           | No                      | `100ms`     | Minimum time between requests for the same IP (e.g., `100ms` will allow 10 requests per second) |
-| `RATE_LIMIT_BURST`           | No                      | `1`         | Maximum number of requests allowed in a burst                                                   |
+| `RATE_LIMIT_BURST`           | No                      | `10`        | Maximum number of requests allowed in a burst                                                   |
 
 ## Star CLI
 
@@ -191,7 +197,7 @@ star [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
 
 | Flag          | Required | Default | Description                                                                               |
 |---------------|----------|---------|-------------------------------------------------------------------------------------------|
-| `--secret`    | Yes      | —       | Shared secret matching the registar server's `SECRET`                                     |
+| `--secret`    | No       | —       | Shared secret matching the registar server's `SECRET`, omit if the server has no secret   |
 | `--registar`  | Yes      | —       | Registar server URL                                                                       |
 | `--port`      | No       | `0`     | Local UDP listen port; `0` means system-assigned                                          |
 | `--ca-cert`   | No       | —       | Path to a CA certificate file for the registar server (used for testing or custom setups) |
@@ -230,13 +236,19 @@ After connecting, the local address to point your game client at is printed to s
 Host a game on a custom port to forward traffic to:
 
 ```sh
-star --secret mysecret --registar https://registar.example.com host --port 12345
+star --registar https://registar.example.com host --port 12345
 ```
 
 Join a game:
 
 ```sh
-star --secret mysecret --registar https://registar.example.com peer --key XXXX-XXXX
+star --registar https://registar.example.com peer --key XXXX-XXXX
+```
+
+If the server requires a secret:
+
+```sh
+star --secret mysecret --registar https://registar.example.com host --port 12345
 ```
 
 ## How It Works
