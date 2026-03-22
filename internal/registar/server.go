@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/dmksnnk/star/internal/platform/http3platform"
 	"github.com/dmksnnk/star/internal/platform/httpplatform"
@@ -76,11 +77,23 @@ type Server struct {
 	relayMu      sync.Mutex
 	relayWaiting map[string]waitingSession
 	relayCount   sync.WaitGroup
+	relayBytes   atomic.Uint64
+
+	p2pConns   atomic.Uint64
+	relayConns atomic.Uint64
 }
 
 type waitingSession struct {
 	stream *http3.Stream
 	ready  chan struct{} // closed by second arrival once proxy is running
+}
+
+type Stats struct {
+	RegisteredConns int    // concurrent QUIC connections
+	WaitingRelays   int    // relays waiting for a peer to arrive and start the proxy
+	BytesRelayed    uint64 // total bytes relayed from the start of the server
+	P2PConns        uint64 // total P2P connections from the start of the server
+	RelayConns      uint64 // total relay connections from the start of the server
 }
 
 // NewServer creates a new registar server.
@@ -222,6 +235,7 @@ func (s *Server) connectPeer(str *http3.Stream, key auth.Key, addrs AddrPair) {
 	}
 	err := initP2P(host, peer)
 	if err == nil {
+		s.p2pConns.Add(1)
 		if s.PeerConnected != nil {
 			s.PeerConnected(key, addrs)
 		}
@@ -240,11 +254,15 @@ func (s *Server) connectPeer(str *http3.Stream, key auth.Key, addrs AddrPair) {
 		return
 	}
 
+	s.relayConns.Add(1)
 	if s.PeerConnected != nil {
 		s.PeerConnected(key, addrs)
 	}
 }
 
+// Relay relays data between a peer and a host for a given session ID.
+// If there is already a waiting session for the session ID, it starts the relay.
+// Otherwise, it waits for a peer to arrive.
 func (s *Server) Relay(w http.ResponseWriter, r *http.Request, sessionID string) {
 	conn, ok := r.Context().Value(quicConnContextKey).(*quic.Conn)
 	if !ok {
@@ -281,7 +299,7 @@ func (s *Server) Relay(w http.ResponseWriter, r *http.Request, sessionID string)
 		go func() {
 			defer s.relayCount.Done()
 
-			if err := relay(s.ctx, waiting.stream, str); err != nil {
+			if err := s.relay(s.ctx, waiting.stream, str); err != nil {
 				if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
 					// server is closing, ignore
 					return
@@ -311,7 +329,25 @@ func (s *Server) Relay(w http.ResponseWriter, r *http.Request, sessionID string)
 	}
 }
 
-func relay(ctx context.Context, a, b *http3.Stream) error {
+// Stats returns collected server stats.
+func (s *Server) Stats() Stats {
+	var stats Stats
+	s.connsMu.Lock()
+	stats.RegisteredConns = len(s.registeredConns)
+	s.connsMu.Unlock()
+
+	s.relayMu.Lock()
+	stats.WaitingRelays = len(s.relayWaiting)
+	s.relayMu.Unlock()
+
+	stats.BytesRelayed = s.relayBytes.Load()
+	stats.P2PConns = s.p2pConns.Load()
+	stats.RelayConns = s.relayConns.Load()
+
+	return stats
+}
+
+func (s *Server) relay(ctx context.Context, a, b *http3.Stream) error {
 	eg, ctx := errgroup.WithContext(ctx) // depend on server context
 
 	eg.Go(func() error {
@@ -324,6 +360,8 @@ func relay(ctx context.Context, a, b *http3.Stream) error {
 			if err := b.SendDatagram(dg); err != nil {
 				return fmt.Errorf("send datagram: %w", err)
 			}
+
+			s.relayBytes.Add(uint64(len(dg)))
 		}
 	})
 
@@ -337,6 +375,8 @@ func relay(ctx context.Context, a, b *http3.Stream) error {
 			if err := a.SendDatagram(dg); err != nil {
 				return fmt.Errorf("send datagram: %w", err)
 			}
+
+			s.relayBytes.Add(uint64(len(dg)))
 		}
 	})
 
