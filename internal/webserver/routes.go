@@ -1,7 +1,6 @@
 package webserver
 
 import (
-	"io/fs"
 	"net/http"
 
 	"github.com/dmksnnk/star/web"
@@ -23,8 +22,7 @@ const (
 func NewRouter(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	staticFS, _ := fs.Sub(web.Static, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", web.StaticHandler()))
 
 	mux.HandleFunc("GET "+routeIndex+"{$}", s.handleIndex)
 	mux.HandleFunc("POST "+routeSetup, s.handleSetup)
