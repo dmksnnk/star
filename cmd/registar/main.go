@@ -301,6 +301,8 @@ func writeCACert(dir string, cert *x509.Certificate) error {
 
 func addHealthCheck(mux *http.ServeMux) {
 	mux.HandleFunc("GET /-/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 	})
 }
