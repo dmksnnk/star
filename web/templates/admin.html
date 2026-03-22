@@ -69,6 +69,8 @@
 </div>
 
 <script>
+    const adminBase = window.location.pathname.replace(/\/+$/, '');
+
     // --- Stats polling ---
     function fmtBytes(n) {
         if (n < 1024) return n + ' B';
@@ -78,7 +80,7 @@
     }
 
     function fetchStats() {
-        fetch('/-/admin/stats').then(r => r.json()).then(d => {
+        fetch(adminBase + '/stats').then(r => r.json()).then(d => {
             document.getElementById('stat-conns').textContent = d.registered_conns;
             document.getElementById('stat-waiting').textContent = d.waiting_relays;
             document.getElementById('stat-bytes').textContent = fmtBytes(d.bytes_relayed);
@@ -159,7 +161,7 @@
     }
 
     function fetchBandwidth() {
-        fetch('/-/admin/bandwidth').then(r => r.json()).then(d => {
+        fetch(adminBase + '/bandwidth').then(r => r.json()).then(d => {
             bwData = d.buckets || [];
             drawChart();
         }).catch(() => { });
@@ -171,7 +173,7 @@
 
     // --- SSE events ---
     const log = document.getElementById('events-log');
-    const es = new EventSource('/-/admin/events');
+    const es = new EventSource(adminBase + '/events');
     es.onmessage = function (e) {
         const line = document.createElement('div');
         line.textContent = e.data;
