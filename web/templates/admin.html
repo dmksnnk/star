@@ -1,0 +1,182 @@
+{{define "title"}}Admin — Star{{end}}
+{{define "content"}}
+<div class="admin" style="font-size:0.8em">
+    <h1>Admin</h1>
+
+    <section>
+        <h2>Connections</h2>
+        <table class="nes-table is-bordered is-centered">
+            <tbody>
+                <tr>
+                    <th>Active Connections</th>
+                    <td id="stat-conns">—</td>
+                </tr>
+                <tr>
+                    <th>P2P Connections</th>
+                    <td id="stat-p2p">—</td>
+                </tr>
+                <tr>
+                    <th>Relay Connections</th>
+                    <td id="stat-relay">—</td>
+                </tr>
+                <tr>
+                    <th>P2P Success Rate</th>
+                    <td id="stat-p2p-rate">—</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Active Hosts</h2>
+        <table class="nes-table is-bordered is-centered" id="hosts-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Public</th>
+                    <th>Private</th>
+                </tr>
+            </thead>
+            <tbody id="hosts-body">
+                <tr>
+                    <td colspan="3">No active hosts</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Relay</h2>
+        <table class="nes-table is-bordered is-centered">
+            <tbody>
+                <tr>
+                    <th>Waiting Relays</th>
+                    <td id="stat-waiting">—</td>
+                </tr>
+                <tr>
+                    <th>Bytes Relayed</th>
+                    <td id="stat-bytes">—</td>
+                </tr>
+            </tbody>
+        </table>
+        <canvas id="bw-chart" width="800" height="200" style="width:100%;background:#212529;display:block;margin-top:1rem;"></canvas>
+    </section>
+
+    <section>
+        <h2>Events</h2>
+        <div class="logs-terminal" id="events-log"></div>
+    </section>
+</div>
+
+<script>
+    // --- Stats polling ---
+    function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+        return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    function fetchStats() {
+        fetch('/-/admin/stats').then(r => r.json()).then(d => {
+            document.getElementById('stat-conns').textContent = d.registered_conns;
+            document.getElementById('stat-waiting').textContent = d.waiting_relays;
+            document.getElementById('stat-bytes').textContent = fmtBytes(d.bytes_relayed);
+            document.getElementById('stat-p2p').textContent = d.p2p_conns;
+            document.getElementById('stat-relay').textContent = d.relay_conns;
+            const total = d.p2p_conns + d.relay_conns;
+            document.getElementById('stat-p2p-rate').textContent =
+                total === 0 ? '—' : (d.p2p_conns / total * 100).toFixed(1) + '%';
+
+            const tbody = document.getElementById('hosts-body');
+            if (!d.active_hosts || d.active_hosts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">No active hosts</td></tr>';
+            } else {
+                tbody.innerHTML = d.active_hosts.map(h =>
+                    `<tr><td style="white-space:nowrap">${h.key}</td><td>${h.public}</td><td>${h.private}</td></tr>`
+                ).join('');
+            }
+        }).catch(() => { });
+    }
+
+    fetchStats();
+    setInterval(fetchStats, 5000);
+
+    // --- Bandwidth chart ---
+    const canvas = document.getElementById('bw-chart');
+    const ctx = canvas.getContext('2d');
+    let bwData = [];
+
+    function drawChart() {
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = '#212529';
+        ctx.fillRect(0, 0, W, H);
+
+        if (bwData.length < 2) {
+            ctx.fillStyle = '#6c757d';
+            ctx.font = '14px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('Waiting for data...', W / 2, H / 2);
+            return;
+        }
+
+        const maxBPS = Math.max(...bwData.map(b => b.bps), 1);
+        const pad = { top: 10, right: 10, bottom: 30, left: 60 };
+        const chartW = W - pad.left - pad.right;
+        const chartH = H - pad.top - pad.bottom;
+
+        // Grid lines
+        ctx.strokeStyle = '#343a40';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = pad.top + chartH - (i / 4) * chartH;
+            ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartW, y); ctx.stroke();
+            ctx.fillStyle = '#6c757d';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(fmtBytes(maxBPS * i / 4) + '/s', pad.left - 4, y + 4);
+        }
+
+        // Line
+        ctx.strokeStyle = '#92cc41';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        bwData.forEach((b, i) => {
+            const x = pad.left + (i / (bwData.length - 1)) * chartW;
+            const y = pad.top + chartH - (b.bps / maxBPS) * chartH;
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        // X axis labels: first and last timestamp
+        ctx.fillStyle = '#6c757d';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(new Date(bwData[0].t * 1000).toLocaleTimeString(), pad.left, H - 8);
+        ctx.textAlign = 'right';
+        ctx.fillText(new Date(bwData[bwData.length - 1].t * 1000).toLocaleTimeString(), pad.left + chartW, H - 8);
+    }
+
+    function fetchBandwidth() {
+        fetch('/-/admin/bandwidth').then(r => r.json()).then(d => {
+            bwData = d.buckets || [];
+            drawChart();
+        }).catch(() => { });
+    }
+
+    fetchBandwidth();
+    setInterval(fetchBandwidth, 60000);
+    window.addEventListener('resize', drawChart);
+
+    // --- SSE events ---
+    const log = document.getElementById('events-log');
+    const es = new EventSource('/-/admin/events');
+    es.onmessage = function (e) {
+        const line = document.createElement('div');
+        line.textContent = e.data;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+    };
+</script>
+{{end}}
