@@ -207,9 +207,6 @@ func parseConfig() config {
 	}
 	cfg.SecretFromFile = strings.TrimSpace(cfg.SecretFromFile) // to remove trailing newlines
 	cfg.Secret = strings.TrimSpace(cfg.Secret)                 // to remove trailing newlines
-	if cfg.SecretFromFile == "" && cfg.Secret == "" {
-		abort("secret is required", errors.New("either SECRET_FILE or SECRET environment variable must be set"))
-	}
 	if cfg.SecretFromFile != "" {
 		cfg.Secret = cfg.SecretFromFile
 	}
@@ -297,7 +294,7 @@ func writeCACert(dir string, cert *x509.Certificate) error {
 }
 
 func addHealthCheck(mux *http.ServeMux) {
-	mux.HandleFunc("/-/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /-/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 }

@@ -18,16 +18,16 @@
                    value='{{.Values.Get "registar-url"}}'>
         </div>
 
-        <div class="nes-field">
-            <label for="secret">Secret</label>
-            <input type="password" name="secret" id="secret" class="nes-input" required
-                   placeholder="Shared secret with the server"
-                   value='{{.Values.Get "secret"}}'>
-        </div>
-
         <details class="collapsible">
             <summary class="nes-btn is-normal">Advanced</summary>
             <div class="advanced-fields">
+                <div class="nes-field">
+                    <label for="secret">Secret</label>
+                    <input type="password" name="secret" id="secret" class="nes-input"
+                           placeholder="Shared secret with the server (optional)"
+                           value='{{.Values.Get "secret"}}'>
+                </div>
+
                 <div class="nes-field">
                     <label>CA Certificate</label>
                     <div class="file-picker">
