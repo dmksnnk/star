@@ -7,7 +7,7 @@ Ever wanted to play a local game with a friend who is far away? Star makes local
 The application comes with two components: Registar, a server that manages connectivity between players,
 and Star, a client that forwards UDP traffic. It has a GUI or can be used via CLI.
 
-You can use the publicly available server at <https://registar.dmknnk.xyz> or deploy your own Registar server.
+You can use the publicly available server at <https://registar.dmksnnk.xyz> or deploy your own Registar server.
 
 ### Deploy a Server
 
