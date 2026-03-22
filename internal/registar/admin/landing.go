@@ -2,17 +2,17 @@ package admin
 
 import (
 	"html/template"
-	"io/fs"
 	"net/http"
 	"time"
 
 	"github.com/dmksnnk/star/web"
 )
 
-func AddLanding(mux *http.ServeMux, every time.Duration, burst int) {
-	staticFS, _ := fs.Sub(web.Static, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+func Landing(every time.Duration, burst int) *http.ServeMux {
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", newLandingHandler(every, burst))
+
+	return mux
 }
 
 type landingData struct {

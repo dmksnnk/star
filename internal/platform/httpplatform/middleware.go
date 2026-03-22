@@ -1,13 +1,16 @@
 package httpplatform
 
 import (
+	"compress/gzip"
 	"log/slog"
 	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -172,6 +175,64 @@ func headers(hs http.Header) []slog.Attr {
 	}
 
 	return attrs
+}
+
+// CacheStaticFiles sets Cache-Control headers for static file extensions.
+func CacheStaticFiles(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch filepath.Ext(r.URL.Path) {
+		case ".css", ".js", ".svg", ".png":
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Gzip compresses responses for compressible file types when the client supports it.
+func Gzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		switch filepath.Ext(r.URL.Path) {
+		case "", ".html", ".css", ".js", ".json", ".xml", ".svg":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Add("Vary", "Accept-Encoding")
+			w.Header().Del("Content-Length")
+			grw := newGzipResponseWriter(w)
+			defer grw.Close()
+			next.ServeHTTP(grw, r)
+		default:
+			next.ServeHTTP(w, r)
+		}
+	})
+}
+
+func newGzipResponseWriter(rw http.ResponseWriter) *gzipResponseWriter {
+	return &gzipResponseWriter{
+		ResponseWriter: rw,
+		w:              gzip.NewWriter(rw),
+	}
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	w *gzip.Writer
+}
+
+func (rw *gzipResponseWriter) Write(b []byte) (int, error) {
+	return rw.w.Write(b)
+}
+
+func (rw *gzipResponseWriter) Close() error {
+	return rw.w.Close()
+}
+
+func (rw *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }
 
 // Wrap handler with middlewares.
