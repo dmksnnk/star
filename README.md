@@ -134,29 +134,36 @@ Prebuilt client can be found at [Releases page](https://github.com/dmksnnk/star/
 If you are hosting the game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-  ![Client home screen](./_screenshots/home.png)
+
+   ![Client home screen](./_screenshots/home.png)
 2. Fill in the server's URL. If the server requires a secret, expand **Advanced** and enter it.
 3. Click "Host a Game".
 4. Select a game from the list or enter a custom port to forward to.
-  ![Host screen](./_screenshots/host.png)
+
+   ![Host screen](./_screenshots/host.png)
 5. Click "Start Hosting".
 6. Share the invite code with your friend.
-  ![Invite code screen](./_screenshots/invite.png)
+
+   ![Invite code screen](./_screenshots/invite.png)
 
 ### Game Peer
 
 If you want only join a game, follow these steps:
 
 1. Run the Star client. This should open a default browser.
-  ![Client home screen](./_screenshots/home.png)
+
+   ![Client home screen](./_screenshots/home.png)
 2. Fill in the server's URL. If the server requires a secret, expand **Advanced** and enter it.
 3. Click "Join a Game".
 4. Enter the invite code you received from the host and click "Connect".
-  ![Join screen](./_screenshots/join.png)
+
+   ![Join screen](./_screenshots/join.png)
 5. You will see the address where you can connect
-  ![Peer connected screen](./_screenshots/connected.png)
+
+   ![Peer connected screen](./_screenshots/connected.png)
 6. Connect the game client to that address, here is an example from Stardew Valley:
-  ![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
+
+   ![stardew valley multiplayer connection screen](./_screenshots/stardew.png)
 
 ## Registar Server Configuration
 
